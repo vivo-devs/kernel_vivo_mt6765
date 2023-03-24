@@ -1,4 +1,1 @@
-*.so*
-vdso-*image.c
-genvdso
-vdso*.lds
+

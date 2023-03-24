@@ -68,6 +68,45 @@ jiffies = jiffies_64;
 #define TRAMP_TEXT
 #endif
 
+#if defined(CONFIG_PG_DIR_RO)
+
+#ifdef CONFIG_UNMAP_KERNEL_AT_EL0
+#define TRAMP_PG_TABLE					\
+	tramp_pg_dir = .;				\
+	. += PAGE_SIZE;
+#else
+#define TRAMP_PG_TABLE
+#endif
+
+#define INIT_PG_TABLES					\
+	. = ALIGN(PAGE_SIZE);				\
+	init_pg_dir = .;				\
+	. += INIT_DIR_SIZE;				\
+	init_pg_end = .;
+
+#ifdef CONFIG_ARM64_SW_TTBR0_PAN
+#define RESERVED_PG_TABLE				\
+	reserved_ttbr0 = .;				\
+	. += RESERVED_TTBR0_SIZE;
+#else
+#define RESERVED_PG_TABLE
+#endif
+
+#define KERNEL_PG_TABLES				\
+	. = ALIGN(PAGE_SIZE);				\
+	idmap_pg_dir = .;				\
+	. += IDMAP_DIR_SIZE;				\
+	TRAMP_PG_TABLE					\
+	RESERVED_PG_TABLE				\
+	swapper_pg_dir = .;				\
+	. += PAGE_SIZE;					\
+	swapper_pg_end = .;
+
+#endif
+#define RTIC_BSS					\
+	. = ALIGN(PAGE_SIZE);				\
+	KEEP(*(.bss.rtic));			\
+	. = ALIGN(PAGE_SIZE);				\
 /*
  * The size of the PE/COFF section that covers the kernel image, which
  * runs from stext to _edata, must be a round multiple of the PE/COFF
@@ -138,6 +177,9 @@ SECTIONS
 	RO_DATA(PAGE_SIZE)		/* everything from this point to     */
 	EXCEPTION_TABLE(8)		/* __init_begin will be marked RO NX */
 	NOTES
+#if defined(CONFIG_PG_DIR_RO)
+	KERNEL_PG_TABLES
+#endif
 
 	. = ALIGN(SEGMENT_ALIGN);
 	__init_begin = .;
@@ -226,6 +268,9 @@ SECTIONS
 	BSS_SECTION(0, 0, 0)
 
 	. = ALIGN(PAGE_SIZE);
+
+#if !defined(CONFIG_PG_DIR_RO)
+
 	idmap_pg_dir = .;
 	. += IDMAP_DIR_SIZE;
 
@@ -241,6 +286,11 @@ SECTIONS
 	swapper_pg_dir = .;
 	. += SWAPPER_DIR_SIZE;
 	swapper_pg_end = .;
+#else
+
+	INIT_PG_TABLES
+
+#endif
 
 	__pecoff_data_size = ABSOLUTE(. - __initdata_begin);
 	_end = .;

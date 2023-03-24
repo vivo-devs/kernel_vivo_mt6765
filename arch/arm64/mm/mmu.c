@@ -103,6 +103,30 @@ static bool dma_overlap(phys_addr_t start, phys_addr_t end)
 	return false;
 }
 
+#if defined(CONFIG_PG_DIR_RO)
+static DEFINE_SPINLOCK(swapper_pgdir_lock);
+
+void set_swapper_pgd(pgd_t *pgdp, pgd_t pgd)
+{
+	pgd_t *fixmap_pgdp;
+
+	spin_lock(&swapper_pgdir_lock);
+	fixmap_pgdp = pgd_set_fixmap(__pa(pgdp));
+#if defined(WRITE_ONCE)
+	WRITE_ONCE(*fixmap_pgdp, pgd);
+#else
+	*fixmap_pgdp = pgd;
+#endif
+	/*
+	 * We need dsb(ishst) here to ensure the page-table-walker sees
+	 * our new entry before set_p?d() returns. The fixmap's
+	 * flush_tlb_kernel_range() via clear_fixmap() does this for us.
+	 */
+	pgd_clear_fixmap();
+	spin_unlock(&swapper_pgdir_lock);
+}
+#endif
+
 pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 			      unsigned long size, pgprot_t vma_prot)
 {
@@ -688,6 +712,7 @@ static void __init map_kernel(pgd_t *pgdp)
  */
 void __init paging_init(void)
 {
+#if !defined(CONFIG_PG_DIR_RO)
 	phys_addr_t pgd_phys = early_pgtable_alloc();
 	pgd_t *pgdp = pgd_set_fixmap(pgd_phys);
 
@@ -708,7 +733,18 @@ void __init paging_init(void)
 
 	pgd_clear_fixmap();
 	memblock_free(pgd_phys, PAGE_SIZE);
+#else
+	pgd_t *pgdp = pgd_set_fixmap(__pa_symbol(swapper_pg_dir));
 
+	map_kernel(pgdp);
+	map_mem(pgdp);
+
+	pgd_clear_fixmap();
+	cpu_replace_ttbr1(lm_alias(swapper_pg_dir));
+	init_mm.pgd = swapper_pg_dir;
+#endif
+
+#if !defined(CONFIG_PG_DIR_RO)
 	/*
 	 * We only reuse the PGD from the swapper_pg_dir, not the pud + pmd
 	 * allocated with it.
@@ -716,6 +752,10 @@ void __init paging_init(void)
 	memblock_free(__pa_symbol(swapper_pg_dir) + PAGE_SIZE,
 		      __pa_symbol(swapper_pg_end) - __pa_symbol(swapper_pg_dir)
 		      - PAGE_SIZE);
+#else
+	memblock_free(__pa_symbol(init_pg_dir),
+		      __pa_symbol(init_pg_end) - __pa_symbol(init_pg_dir));
+#endif
 }
 
 /*

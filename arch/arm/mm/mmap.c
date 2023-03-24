@@ -21,6 +21,8 @@
 #define MIN_GAP		(128*1024*1024UL)
 #define MAX_GAP		((STACK_TOP)/6*5)
 #define STACK_RND_MASK	(0x7ff >> (PAGE_SHIFT - 12))
+#define MIN_GAP_32BIT	(64*1024*1024UL)
+#define VIVO_RND_SHIFT	(15)
 
 static int mmap_is_legacy(struct rlimit *rlim_stack)
 {
@@ -46,8 +48,8 @@ static unsigned long mmap_base(unsigned long rnd, struct rlimit *rlim_stack)
 	if (gap + pad > gap)
 		gap += pad;
 
-	if (gap < MIN_GAP)
-		gap = MIN_GAP;
+	if (gap < MIN_GAP_32BIT)
+		gap = MIN_GAP_32BIT;
 	else if (gap > MAX_GAP)
 		gap = MAX_GAP;
 
@@ -185,7 +187,7 @@ unsigned long arch_mmap_rnd(void)
 {
 	unsigned long rnd;
 
-	rnd = get_random_long() & ((1UL << mmap_rnd_bits) - 1);
+	rnd = get_random_long() & ((1UL << VIVO_RND_SHIFT) - 1);
 
 	return rnd << PAGE_SHIFT;
 }

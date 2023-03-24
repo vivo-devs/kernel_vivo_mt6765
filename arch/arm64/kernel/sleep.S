@@ -101,6 +101,9 @@ ENTRY(cpu_resume)
 	bl	el2_setup		// if in EL2 drop to EL1 cleanly
 	bl	__cpu_setup
 	/* enable the MMU early - so we can access sleep_save_stash by va */
+#if defined(CONFIG_PG_DIR_RO)
+	adrp	x1, swapper_pg_dir
+#endif
 	bl	__enable_mmu
 	ldr	x8, =_cpu_resume
 	br	x8

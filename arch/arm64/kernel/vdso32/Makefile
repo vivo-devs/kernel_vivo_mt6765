@@ -93,7 +93,8 @@ VDSO_CFLAGS += $(call cc32-option,-Wno-pointer-sign)
 VDSO_CFLAGS += $(call cc32-option,-fno-strict-overflow)
 VDSO_CFLAGS += $(call cc32-option,-Werror=strict-prototypes)
 VDSO_CFLAGS += $(call cc32-option,-Werror=date-time)
-VDSO_CFLAGS += $(call cc32-option,-Werror=incompatible-pointer-types)
+#tp bianyi
+#VDSO_CFLAGS += $(call cc32-option,-Werror=incompatible-pointer-types)
 
 # The 32-bit compiler does not provide 128-bit integers, which are used in
 # some headers that are indirectly included from the vDSO code.

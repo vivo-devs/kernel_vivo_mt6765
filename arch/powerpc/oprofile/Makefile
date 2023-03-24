@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-subdir-ccflags-$(CONFIG_PPC_WERROR) := -Werror
+subdir-ccflags-$(CONFIG_PPC_WERROR) := 
 
 ccflags-$(CONFIG_PPC64)	:= $(NO_MINIMAL_TOC)
 

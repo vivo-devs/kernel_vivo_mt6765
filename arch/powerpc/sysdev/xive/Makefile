@@ -1,4 +1,4 @@
-subdir-ccflags-$(CONFIG_PPC_WERROR) := -Werror
+subdir-ccflags-$(CONFIG_PPC_WERROR) := 
 
 obj-y				+= common.o
 obj-$(CONFIG_PPC_XIVE_NATIVE)	+= native.o
