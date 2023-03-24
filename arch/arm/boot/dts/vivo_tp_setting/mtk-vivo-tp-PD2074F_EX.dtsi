@@ -1,0 +1,316 @@
+/*********************touch screen config *************************/
+&touchscreencfg { /* vivo ts configure */
+		compatible = "vivo,touchscreen-config";
+		vivo,ts-product-name="PD2014";
+		vivo,use-ic-list="nt36525";
+		vivo,ts_vdd_mode="gpio_mode"; /*regulator_mode or gpio_mode*/
+		/*----- function set BEG ---- */
+		vivo,ts-gloves-mode=<0>;
+		vivo,ts-large-obj-suppression=<1>;
+		vivo,ts-dclick-wake=<1>;
+		vivo,ts-gesture-mode=<1>; /*1=sold in native,2=sold in abroad,3...etc=for custom extensive*/
+		vivo,ts-custom-gesture=<0>;
+		vivo,ts-module-id-methods=<2>;/*0=by IC id,1=gpio,2=by LCD ID 3=...etc=for custom extensive*/
+		vivo,ts-fw-upgrade-lcd-referrence=<0>;
+		vivo,ts-anti-esd=<1>;
+		vivo,ts-charger-conn-judge=<1>;
+		vivo,ts-module-smt-mode=<1>; /* 0=COB,1=COF */
+		/*----- function set END ---- */
+		status = "okay";
+		
+	tp_moduel{
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<82>;
+		vts-type=<0>;
+		vts-lcmid=<49>;//BOE NT36525
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+		vts-need-caliberation=<0>;
+		vts-virtual-proximinity=<0>;
+		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+		vts-gesture=<1>;
+		};
+	tp_modue2{
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<82>;
+		vts-type=<0>;
+		vts-lcmid=<161>;//TXD NT36525
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+		vts-need-caliberation=<0>;
+		vts-virtual-proximinity=<0>;
+		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+		vts-gesture=<1>;
+	};
+	tp_modue3{
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<82>;
+		vts-type=<0>;
+		vts-lcmid=<177>;//INX NT36525
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+		vts-need-caliberation=<0>;
+		vts-virtual-proximinity=<0>;
+		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+		vts-gesture=<1>;
+	};
+	tp_module4 {
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<90>;
+		vts-type=<0>;
+		vts-lcmid=<17>;//0x11  ili9881 
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+		vts-need-caliberation=<0>;
+		vts-virtual-proximinity=<0>;
+		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+	};
+	tp_modue5{
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<82>;
+		vts-type=<0>;
+		vts-lcmid=<178>;//INX NT36525 G5
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+		vts-need-caliberation=<0>;
+		vts-virtual-proximinity=<0>;
+		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+		vts-gesture=<1>;
+	};
+	tp_module6 {
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<91>;
+		vts-type=<0>;
+		vts-lcmid=<179>;//0xb3  INX ILI 9882N 
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+ 		vts-need-caliberation=<0>;
+ 		vts-virtual-proximinity=<0>;
+ 		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+		vts-gesture=<0>;
+	};
+	tp_module7 {
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<91>;
+		vts-type=<0>;
+		vts-lcmid=<18>;//0x12   ILI9882N  TM 
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+ 		vts-need-caliberation=<0>;
+ 		vts-virtual-proximinity=<0>;
+ 		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+		vts-gesture=<0>;
+	};
+	tp_modue8{
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<37>;
+		vts-type=<0>;
+		vts-lcmid=<146>;//1211742+BOE+FT8016 0X92
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+		vts-need-caliberation=<0>;
+		vts-virtual-proximinity=<0>;
+		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+	};
+	tp_modue9{
+		compatible = "vivo,touch-panel-module";
+		vts-ic-number=<84>;
+		vts-type=<0>;
+		vts-lcmid=<145>;//NT36525A+TXD 1211747 0x91 
+		vts-dimention-x=<720>;
+		vts-dimention-y=<1600>;
+		vts-tx-sensors=<18>;
+		vts-rx-sensors=<32>;
+		vts-incell=<1>;
+		vts-need-caliberation=<0>;
+		vts-virtual-proximinity=<0>;
+		vts-long-press=<0>;
+		vts-module-vendor=<0xF0>;
+		vts-no-flash=<1>;
+	};
+};
+&pio{
+
+	spi2_clk_set_cfg:spi2_clk_set{
+		pins_cmd_dat { 
+		pinmux = <PINMUX_GPIO18__FUNC_SPI2_CLK>; 
+		bias-disable; 
+		drive-strength = <3>;//0--2ma   ......3 8mA
+		};
+	};
+	spi2_cs_set_cfg:spi2_cs_set{
+		pins_cmd_dat { 
+		pinmux = <PINMUX_GPIO20__FUNC_GPIO20>; 
+		drive-strength = <3>;
+		bias-disable; 
+		};
+	};
+	spi2_miso_set_cfg:spi2_miso_set{
+		pins_cmd_dat { 
+		pinmux = <PINMUX_GPIO19__FUNC_GPIO19>; 
+		drive-strength = <3>;
+		bias-disable; 
+		};
+	};
+	spi2_mosi_set_cfg:spi2_mosi_set{
+		pins_cmd_dat { 
+		pinmux = <PINMUX_GPIO17__FUNC_SPI2_MO>; 
+		drive-strength = <3>;
+		bias-disable; 
+		};
+	};
+	spi_pins_pd2036_cfg:spi_pins_pd2036 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO18__FUNC_SPI2_CLK>,
+					 <PINMUX_GPIO19__FUNC_SPI2_MI>,
+					 <PINMUX_GPIO17__FUNC_SPI2_MO>,
+					 <PINMUX_GPIO20__FUNC_SPI2_CSB>;
+			drive-strength = <3>;
+			bias-disable;
+		};
+	};
+};
+
+
+&spi2 {
+	#address-cells = <1>;
+	#size-cells = <0>;	
+	
+	vts_device@0 {
+		compatible = "vivo,ts-spi";
+		status = "okay";
+		reg=<0>;
+		spi-max-frequency = <4800000>;
+
+		nt36672 {
+			compatible = "novatek,NVT-ts-spi-v2";
+			status = "ok";
+		
+			vts-type=<0>;
+			vts-ic-number=<82>;
+			spi-max-frequency = <9600000>;	//4800000,9600000,15000000,19200000
+			pinctrl-names = "spi_clk_active","spi_mosi_active";
+			pinctrl-0 = <&spi2_clk_set_cfg>;
+			//novatek,reset-gpio = <&pio 10 0x00>;
+			novatek,irq-gpio = <&pio 0 0x02>;
+			sensor-test-key="com.nttouchscreen.mptest:MainActivity:android.intent.action.novatek:0:testResult";
+			lcm-noise-test-key="com.nt36xxxtouchscreen.deltadiff:MainActivity:null:null:null";
+			rawdata-test-key="com.nttouchscreen.getdata:MainActivity:null:null:null";
+			rf-noise-test-key="com.nt36xxxtouchscreen.deltadiff:BspTest:android.intent.action.nvtdeltadiff:0:testResult";
+			
+			/* 672 */
+			//novatek,swrst-n8-addr = <0x01F01A>;
+
+			/* 672A */
+			novatek,swrst-n8-addr = <0x03F0FE>;
+		};
+		ili9881h {
+			compatible = "ilitek,ILI-ts-spi-v2";
+			status = "ok";
+			vts-type=<0>;
+			vts-ic-number=<90>;
+			spi-max-frequency = <9600000>;	//4800000,9600000,15000000,19200000
+			ilitek,reset-gpio = <&pio 21 0x00>;
+			ilitek,irq-gpio = <&pio 0 0x02>;
+			
+			sensor-test-key="com.ilitek.touchscreen.tptest:MainActivity:com.ilitek.touchscreen.action.tptest:0:ILITEK_TpTestResult";
+			lcm-noise-test-key="com.ilitek.touchscreen.noisev2:MainActivity:null:null:null"; 
+			rawdata-test-key="com.ilitek.touchscreen.noisev2:DataShowActivity:null:null:null";
+			rf-noise-test-key="com.ilitek.touchscreen.noisev2:BspTestActivity:com.ilitek.touchscreen.action.noisetest:0:ILITEK_TpTestResult";
+			
+		};
+		ili_9882n {
+			status = "okay";
+			compatible = "tchip,ilitek";
+			vts-type=<0>;
+			vts-ic-number=<91>;
+			spi-max-frequency = <9600000>;
+			touch,reset-gpio = <&pio 21 0x00>;
+			touch,irq-gpio = <&pio 0 0x02>;
+
+			sensor-test-key="com.ilitek.touchscreen.tptest3X:MP3XActivity:com.ilitek.touchscreen.action.tptest:0:ILITEK_TpTestResult";
+			lcm-noise-test-key="com.ilitek.touchscreen.noisev2:MainActivity:null:null:null"; 
+			rawdata-test-key="com.ilitek.touchscreen.noisev2:DataShowActivity:null:null:null";
+			rf-noise-test-key="com.ilitek.touchscreen.noisev2:BspTestActivity:com.ilitek.touchscreen.action.noisetest:0:ILITEK_TpTestResult";
+
+		};
+		ft8016 {
+			compatible = "focaltech,ft8756_v2";
+			vts-type=<0>;
+			vts-ic-number=<37>;
+			spi-max-frequency = <6000000>;	//4800000,9600000,15000000,19200000
+			focaltech,reset-gpio = <&pio 21 0x00>;
+			focaltech,irq-gpio = <&pio 0 0x02>;
+			focaltech,max-touch-number = <10>;
+			focaltech,display-coords = <0 0 720 1600>;
+			focaltech,ic_name = "ft8016";
+			sensor-test-key="com.focaltouchscreen.sensortest:MainActivity:com.focaltouchscreen.sensortest:0:focal_test_result";
+			lcm-noise-test-key="com.focaltech.deltadiff:MainActivity:null:null:null";
+			rawdata-test-key="com.focaltech.deltadiff:DataActivity:null:null:null";
+			rf-noise-test-key="com.focaltech.deltadiff:BspTestActivity:com.focaltech.deltadiff:0:testResult";
+
+ 		};
+		nt36525A {
+			compatible = "novatek,NVT-ts-spi-v2";
+			status = "ok";
+			vts-type=<0>;
+			vts-ic-number=<84>;
+			spi-max-frequency = <9600000>;	//4800000,9600000,15000000,19200000
+			pinctrl-names = "spi_clk_active","spi_mosi_active";
+			pinctrl-0 = <&spi2_clk_set_cfg>;
+			novatek,reset-gpio = <&pio 21 0x00>;
+			novatek,irq-gpio = <&pio 0 0x02>;
+			sensor-test-key="com.nttouchscreen.mptest:MainActivity:android.intent.action.novatek:0:testResult";
+			lcm-noise-test-key="com.nt36xxxtouchscreen.deltadiff:MainActivity:null:null:null";
+			rawdata-test-key="com.nttouchscreen.getdata:MainActivity:null:null:null";
+			rf-noise-test-key="com.nt36xxxtouchscreen.deltadiff:BspTest:android.intent.action.nvtdeltadiff:0:testResult";
+			
+			/* 672 */
+			//novatek,swrst-n8-addr = <0x01F01A>;
+
+			/* 672A */
+			novatek,swrst-n8-addr = <0x03F0FE>;
+		};
+};
+};
+	

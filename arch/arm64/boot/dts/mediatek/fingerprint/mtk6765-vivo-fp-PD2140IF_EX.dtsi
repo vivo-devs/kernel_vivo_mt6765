@@ -1,0 +1,218 @@
+&spi1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	fingerprint@0 {
+		compatible = "mediatek,fingerprint";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		//vfp-supply = <&mt_pmic_vcama_ldo_reg>;
+		status = "okay";
+	};
+};
+
+&focaltech_fp {
+	interrupt-parent = <&pio>;
+	interrupts = <5 IRQ_TYPE_EDGE_RISING 5 0>;
+
+	fp,vdd_use_pmic;
+	vfp-supply = <&mt_pmic_vcama_ldo_reg>;
+	fp,reset_gpio = <&pio 169 0>;
+	fp,irq-gpio = <&pio 5 0>;
+	status = "okay";
+
+	pinctrl-names = "fingerprint_irq", "miso_spi", "miso_pullhigh", "miso_pulllow", "reset_high", "reset_low","mosi_spi","mosi_pullhigh","mosi_pulllow","cs_spi",    "cs_pullhigh","cs_pulllow","clk_spi","clk_pullhigh","clk_pulllow";
+	pinctrl-0 = <&fingerprint_irq>;
+	pinctrl-1 = <&fingerprint_miso_spi>;
+	pinctrl-2 = <&fingerprint_miso_pullhigh>;
+	pinctrl-3 = <&fingerprint_miso_pulllow>;
+	pinctrl-4 = <&fingerprint_reset_high>;
+	pinctrl-5 = <&fingerprint_reset_low>;
+	pinctrl-6 = <&fingerprint_mosi_spi>;
+	pinctrl-7 = <&fingerprint_mosi_pullhigh>;
+	pinctrl-8 = <&fingerprint_mosi_pulllow>;
+	pinctrl-9 = <&fingerprint_cs_spi>;
+	pinctrl-10 = <&fingerprint_cs_pullhigh>;
+	pinctrl-11 = <&fingerprint_cs_pulllow>;
+	pinctrl-12 = <&fingerprint_clk_spi>;
+	pinctrl-13 = <&fingerprint_clk_pullhigh>;
+	pinctrl-14 = <&fingerprint_clk_pulllow>;
+};
+
+&chipone_sidefp {
+	interrupt-parent = <&pio>;
+	interrupts = <5 IRQ_TYPE_EDGE_RISING 5 0>;
+	debounce = <5 0>;
+	fpsensor,vdd_use_pmic;
+	vfp-supply = <&mt_pmic_vcama_ldo_reg>;
+	fpsensor,reset_gpio = <&pio 169 0>;
+	fpsensor,irq-gpio = <&pio 5 0>;
+	status = "okay";
+
+	pinctrl-names = "fingerprint_irq", "miso_spi", "miso_pullhigh", "miso_pulllow", "reset_high", "reset_low","mosi_spi","mosi_pullhigh","mosi_pulllow","cs_spi",    "cs_pullhigh","cs_pulllow","clk_spi","clk_pullhigh","clk_pulllow";
+	pinctrl-0 = <&fingerprint_irq>;
+	pinctrl-1 = <&fingerprint_miso_spi>;
+	pinctrl-2 = <&fingerprint_miso_pullhigh>;
+	pinctrl-3 = <&fingerprint_miso_pulllow>;
+	pinctrl-4 = <&fingerprint_reset_high>;
+	pinctrl-5 = <&fingerprint_reset_low>;
+	pinctrl-6 = <&fingerprint_mosi_spi>;
+	pinctrl-7 = <&fingerprint_mosi_pullhigh>;
+	pinctrl-8 = <&fingerprint_mosi_pulllow>;
+	pinctrl-9 = <&fingerprint_cs_spi>;
+	pinctrl-10 = <&fingerprint_cs_pullhigh>;
+	pinctrl-11 = <&fingerprint_cs_pulllow>;
+	pinctrl-12 = <&fingerprint_clk_spi>;
+	pinctrl-13 = <&fingerprint_clk_pullhigh>;
+	pinctrl-14 = <&fingerprint_clk_pulllow>;
+};
+
+&goodix_sidefp {
+	interrupt-parent = <&pio>;
+	interrupts = <5 IRQ_TYPE_EDGE_RISING 5 0>;
+	fp,vdd_use_pmic;
+	vfp-supply = <&mt_pmic_vcama_ldo_reg>;
+	goodix,gpio_reset = <&pio 169 0>;
+	goodix,gpio_irq = <&pio 5 0>;
+	status = "okay";
+
+	pinctrl-names = "fingerprint_irq", "miso_spi", "miso_pullhigh", "miso_pulllow", "reset_high", "reset_low","mosi_spi","mosi_pullhigh","mosi_pulllow","cs_spi",    "cs_pullhigh","cs_pulllow","clk_spi","clk_pullhigh","clk_pulllow";
+	pinctrl-0 = <&fingerprint_irq>;
+	pinctrl-1 = <&fingerprint_miso_spi>;
+	pinctrl-2 = <&fingerprint_miso_pullhigh>;
+	pinctrl-3 = <&fingerprint_miso_pulllow>;
+	pinctrl-4 = <&fingerprint_reset_high>;
+	pinctrl-5 = <&fingerprint_reset_low>;
+	pinctrl-6 = <&fingerprint_mosi_spi>;
+	pinctrl-7 = <&fingerprint_mosi_pullhigh>;
+	pinctrl-8 = <&fingerprint_mosi_pulllow>;
+	pinctrl-9 = <&fingerprint_cs_spi>;
+	pinctrl-10 = <&fingerprint_cs_pullhigh>;
+	pinctrl-11 = <&fingerprint_cs_pulllow>;
+	pinctrl-12 = <&fingerprint_clk_spi>;
+	pinctrl-13 = <&fingerprint_clk_pullhigh>;
+	pinctrl-14 = <&fingerprint_clk_pulllow>;
+};
+
+&pio {
+	fingerprint_irq: state_irq {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO5__FUNC_GPIO5>;
+			slew-rate = <0>;
+			bias-disable;
+		};
+	};
+
+	fingerprint_miso_spi: state_miso_spi {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO25__FUNC_SPI1_A_MI>;
+			drive-strength = <2>;
+		};
+	};
+
+	fingerprint_miso_pullhigh: state_miso_pullhigh {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO25__FUNC_GPIO25>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	fingerprint_miso_pulllow: state_miso_pulllow {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO25__FUNC_GPIO25>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+
+	fingerprint_reset_high: state_reset_high {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO169__FUNC_GPIO169>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	fingerprint_reset_low: state_reset_low {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO169__FUNC_GPIO169>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+
+	fingerprint_mosi_spi: state_mosi_spi {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO27__FUNC_SPI1_A_MO>;
+			drive-strength = <3>;
+		};
+	};
+
+	fingerprint_mosi_pullhigh: state_mosi_pullhigh {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO27__FUNC_GPIO27>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	fingerprint_mosi_pulllow: state_mosi_pulllow {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO27__FUNC_GPIO27>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+
+	fingerprint_cs_spi: state_cs_spi {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO26__FUNC_SPI1_A_CSB>;
+			drive-strength = <3>;
+		};
+	};
+
+	fingerprint_cs_pullhigh: state_cs_pullhigh {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO26__FUNC_GPIO26>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	fingerprint_cs_pulllow: state_cs_pulllow {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO26__FUNC_GPIO26>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+
+	fingerprint_clk_spi: state_clk_spi {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO28__FUNC_SPI1_A_CLK>;
+			drive-strength = <2>;
+		};
+	};
+	fingerprint_clk_pullhigh: state_clk_pullhigh {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO28__FUNC_GPIO28>;
+			slew-rate = <1>;
+			output-high;
+		};
+	};
+
+	fingerprint_clk_pulllow: state_clk_pulllow {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO28__FUNC_GPIO28>;
+			slew-rate = <1>;
+			output-low;
+		};
+	};
+};
+
+&fp_id {
+	status="okay";
+	vivo,project-name = "PD2140IF_EX";
+	vivo,support_soft_fingerprint_id;
+	vivo,soft_fingerprint_id="sidefp_xxxx_xxxx";
+};

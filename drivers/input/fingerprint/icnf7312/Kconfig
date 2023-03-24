@@ -1,0 +1,7 @@
+#
+# CHIPONE sensors
+#
+config BBK_ICNF7312
+    tristate " fingerprint sensor IRQ support"
+    help
+		If you say yes here you get IRQ support for the fingerprint ).
