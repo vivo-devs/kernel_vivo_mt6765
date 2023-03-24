@@ -24,6 +24,10 @@
 #include "host.h"
 #include "mmc_ops.h"
 
+#ifdef CONFIG_MMC_VSM
+#include "mmc_vsm.h"
+#endif
+
 #ifdef CONFIG_FAIL_MMC_REQUEST
 
 static DECLARE_FAULT_ATTR(fail_default_attr);
@@ -225,6 +229,88 @@ static int mmc_clock_opt_set(void *data, u64 val)
 DEFINE_SIMPLE_ATTRIBUTE(mmc_clock_fops, mmc_clock_opt_get, mmc_clock_opt_set,
 	"%llu\n");
 
+#ifdef CONFIG_MMC_VSM
+static int mmc_vsm_get(void *data, u64 *val)
+{
+	struct mmc_host *host = data;
+
+	if (!host && host->card)
+		return -EINVAL;
+
+	*val = host->card->vsm_mask;
+
+	return 0;
+}
+
+static int mmc_vsm_set(void *data, u64 val)
+{
+	struct mmc_host *host = data;
+
+	if (!host || (val < 0) || !host->card)
+		return -EINVAL;
+
+	mmc_claim_host(host);
+	host->card->vsm_mask = val;
+	mmc_release_host(host);
+
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(mmc_vsm_fops, mmc_vsm_get,
+		mmc_vsm_set, "%llu\n");
+
+#endif
+
+static int mmc_int_cnt_enable_get(void *data, u64 *val)
+{
+	struct mmc_host *host = data;
+
+	*val = host->int_cnt_enable;
+
+	return 0;
+}
+
+static int mmc_int_cnt_enable_set(void *data, u64 val)
+{
+	struct mmc_host *host = data;
+
+	/* We need this check due to input value is u64 */
+	if (val < 0)
+		return -EINVAL;
+
+	mmc_claim_host(host);
+	host->int_cnt_enable = val;
+	if (val == 1)
+		host->int_cnt = 0;
+	mmc_release_host(host);
+
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(mmc_int_cnt_enable_fops, mmc_int_cnt_enable_get, mmc_int_cnt_enable_set,
+	"%llu\n");
+
+static int mmc_int_cnt_show(struct seq_file *s, void *data)
+{
+	struct mmc_host	*host = s->private;
+
+	seq_printf(s, "%d\n", host->int_cnt);
+
+	return 0;
+}
+
+static int mmc_int_cnt_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, mmc_int_cnt_show, inode->i_private);
+}
+
+static const struct file_operations mmc_int_cnt_fops = {
+	.open		= mmc_int_cnt_open,
+	.read       = seq_read,
+	.llseek     = seq_lseek,
+	.release    = single_release,
+};
+
 void mmc_add_host_debugfs(struct mmc_host *host)
 {
 	struct dentry *root;
@@ -253,6 +339,11 @@ void mmc_add_host_debugfs(struct mmc_host *host)
 			&mmc_clock_fops))
 		goto err_node;
 
+#ifdef CONFIG_MMC_VSM
+	if (!debugfs_create_file("vsm", S_IRUSR | S_IWUSR, root, host,
+			&mmc_vsm_fops))
+		goto err_node;
+#endif
 #ifdef CONFIG_FAIL_MMC_REQUEST
 	if (fail_request)
 		setup_fault_attr(&fail_default_attr, fail_request);
@@ -262,6 +353,13 @@ void mmc_add_host_debugfs(struct mmc_host *host)
 					     &host->fail_mmc_request)))
 		goto err_node;
 #endif
+	if (!debugfs_create_file("int_cnt_enable", 0600, root, host,
+		&mmc_int_cnt_enable_fops))
+		goto err_node;
+	if (!debugfs_create_file("int_cnt", 0600, root, host,
+		&mmc_int_cnt_fops))
+		goto err_node;
+
 	return;
 
 err_node:
@@ -275,6 +373,158 @@ void mmc_remove_host_debugfs(struct mmc_host *host)
 {
 	debugfs_remove_recursive(host->debugfs_root);
 }
+
+#ifdef CONFIG_MMC_VSM
+#define NAND_INFO_STR_LEN	1025
+
+static int mmc_nand_info_open(struct inode *inode, struct file *filp)
+{
+	struct mmc_card *card = inode->i_private;
+	char *buf;
+	u8 *nand_info;
+	int err = 0;
+
+	buf = kmalloc(NAND_INFO_STR_LEN + 1, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	nand_info = kmalloc(512, GFP_KERNEL);
+	if (!nand_info) {
+		err = -ENOMEM;
+		goto out_free_buf;
+	}
+
+	memset(buf, 0x0, NAND_INFO_STR_LEN + 1);
+	memset(nand_info, 0x0, 512);
+
+	mmc_get_card(card, NULL);
+	err = mmc_nand_info_get(card, buf, nand_info);
+	if (err)
+		pr_err("[VSM]%s: mmc_nand_info_get err (%d)\n",
+			mmc_hostname(card->host), err);
+
+	filp->private_data = buf;
+	mmc_put_card(card, NULL);
+	kfree(nand_info);
+	return 0;
+
+out_free_buf:
+	kfree(buf);
+	return err;
+}
+
+static ssize_t mmc_nand_info_read(struct file *filp, char __user *ubuf,
+				size_t cnt, loff_t *ppos)
+{
+	char *buf = filp->private_data;
+
+	return simple_read_from_buffer(ubuf, cnt, ppos,
+				       buf, NAND_INFO_STR_LEN);
+}
+
+static int mmc_nand_info_release(struct inode *inode, struct file *file)
+{
+	kfree(file->private_data);
+	return 0;
+}
+
+static const struct file_operations mmc_dbg_nand_info_fops = {
+	.open		= mmc_nand_info_open,
+	.read		= mmc_nand_info_read,
+	.release	= mmc_nand_info_release,
+	.llseek		= default_llseek,
+};
+#endif
+
+#ifdef MTK_BKOPS_IDLE_MAYA
+static int mmc_bkops_stats_open(struct inode *inode, struct file *filp)
+{
+	struct mmc_card *card = inode->i_private;
+
+	filp->private_data = card;
+
+	card->bkops_info.bkops_stats.print_stats = 1;
+	return 0;
+}
+
+static ssize_t mmc_bkops_stats_read(struct file *filp, char __user *ubuf,
+	size_t cnt, loff_t *ppos)
+{
+	struct mmc_card *card = filp->private_data;
+	struct mmc_bkops_stats *bkops_stats;
+	int i, ret;
+	unsigned long page = get_zeroed_page(GFP_KERNEL);
+	char *temp_buf = (char *) page;
+
+	if (!card)
+		return cnt;
+
+	bkops_stats = &card->bkops_info.bkops_stats;
+	if (!bkops_stats->print_stats)
+		return 0;
+
+	if (!bkops_stats->enabled) {
+		pr_err("%s: bkops statistics are disabled\n",
+			mmc_hostname(card->host));
+		goto exit;
+	}
+
+	spin_lock(&bkops_stats->lock);
+	temp_buf += sprintf(temp_buf, "%s: bkops statistics:\n", mmc_hostname(card->host));
+
+	for (i = 0; i < BKOPS_NUM_OF_SEVERITY_LEVELS; ++i) {
+		temp_buf += sprintf(temp_buf, "%s: BKOPS: due to level %d: %u\n",
+				mmc_hostname(card->host), i, bkops_stats->bkops_level[i]);
+	}
+	temp_buf += sprintf(temp_buf, "%s: BKOPS: stopped due to HPI: %u\n",
+				mmc_hostname(card->host), bkops_stats->hpi);
+	temp_buf += sprintf(temp_buf, "%s: BKOPS: how many time host was suspended: %u\n",
+				mmc_hostname(card->host), bkops_stats->suspend);
+	spin_unlock(&bkops_stats->lock);
+	ret = simple_read_from_buffer(ubuf, cnt, ppos, (char *) page, (unsigned long) temp_buf - page);
+	free_page(page);
+exit:
+	if (bkops_stats->print_stats == 1) {
+		bkops_stats->print_stats = 0;
+		return strnlen(ubuf, cnt);
+	}
+	return ret;
+}
+
+static ssize_t mmc_bkops_stats_write(struct file *filp,
+	const char __user *ubuf, size_t cnt, loff_t *ppos)
+{
+	struct mmc_card *card = filp->private_data;
+	char value;
+	struct mmc_bkops_stats *bkops_stats;
+	int cnt;
+
+	if (!card)
+		return cnt;
+
+	bkops_stats = &card->bkops_info.bkops_stats;
+
+	cnt = sscanf(ubuf, "%s", &value);
+	if (cnt != 1)
+		return -1;
+	if (value) {
+		mmc_blk_init_bkops_statistics(card);
+	} else {
+		pr_err("enter into mmc_bkops_stats_write else bkops_stats->enabled = false\n");
+		spin_lock(&bkops_stats->lock);
+		bkops_stats->enabled = false;
+		spin_unlock(&bkops_stats->lock);
+	}
+
+	return cnt;
+}
+
+static const struct file_operations mmc_dbg_bkops_stats_fops = {
+	.open = mmc_bkops_stats_open,
+	.read = mmc_bkops_stats_read,
+	.write = mmc_bkops_stats_write
+};
+#endif
 
 void mmc_add_card_debugfs(struct mmc_card *card)
 {
@@ -298,6 +548,13 @@ void mmc_add_card_debugfs(struct mmc_card *card)
 	if (!debugfs_create_x32("state", S_IRUSR, root, &card->state))
 		goto err;
 
+#ifdef CONFIG_MMC_VSM
+	if (mmc_card_mmc(card))
+		if (!debugfs_create_file("nand_info", S_IRUSR, root, card,
+					&mmc_dbg_nand_info_fops))
+			goto err;
+#endif
+
 	return;
 
 err:
@@ -311,3 +568,9 @@ void mmc_remove_card_debugfs(struct mmc_card *card)
 	debugfs_remove_recursive(card->debugfs_root);
 	card->debugfs_root = NULL;
 }
+/*
+ *void mmc_crypto_debugfs(struct mmc_host *host)
+ *{
+ *mmc_crypto_debug(host);
+ *}
+ */

@@ -12,4 +12,6 @@ struct mmc_host;
 
 int mmc_gpio_alloc(struct mmc_host *host);
 
+int mmc_gpio_get_status(struct mmc_host *host);
+
 #endif

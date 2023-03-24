@@ -133,6 +133,10 @@ static inline bool fsg_lun_is_open(struct fsg_lun *curlun)
 /* Maximal number of LUNs supported in mass storage function */
 #define FSG_MAX_LUNS	16
 
+#ifdef CONFIG_USB_CONFIGFS_MTK_FASTMETA
+#define LUN_NAME_LEN	8
+#endif
+
 enum fsg_buffer_state {
 	BUF_STATE_SENDING = -2,
 	BUF_STATE_RECEIVING,
@@ -206,6 +210,7 @@ void fsg_lun_close(struct fsg_lun *curlun);
 int fsg_lun_open(struct fsg_lun *curlun, const char *filename);
 int fsg_lun_fsync_sub(struct fsg_lun *curlun);
 void store_cdrom_address(u8 *dest, int msf, u32 addr);
+int fsg_get_toc(struct fsg_lun *curlun, int msf, int format, u8 *buf);
 ssize_t fsg_show_ro(struct fsg_lun *curlun, char *buf);
 ssize_t fsg_show_nofua(struct fsg_lun *curlun, char *buf);
 ssize_t fsg_show_file(struct fsg_lun *curlun, struct rw_semaphore *filesem,

@@ -1,0 +1,1 @@
+obj-y += imx355sunpd2140frontmipiraw_Sensor.o

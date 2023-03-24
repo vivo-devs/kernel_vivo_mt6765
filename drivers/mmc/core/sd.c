@@ -28,6 +28,7 @@
 #include "mmc_ops.h"
 #include "sd.h"
 #include "sd_ops.h"
+#include "slot-gpio.h"
 
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
@@ -424,25 +425,48 @@ static void sd_update_bus_speed_mode(struct mmc_card *card)
 		return;
 	}
 
-	if ((card->host->caps & MMC_CAP_UHS_SDR104) &&
-	    (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR104)) {
+	if (card->host->speed_mode_sdr104) {
+		if ((card->host->caps & MMC_CAP_UHS_SDR104) &&
+		    (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR104)) {
 			card->sd_bus_speed = UHS_SDR104_BUS_SPEED;
-	} else if ((card->host->caps & MMC_CAP_UHS_DDR50) &&
-		   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_DDR50)) {
+		} else if ((card->host->caps & MMC_CAP_UHS_DDR50) &&
+			   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_DDR50)) {
 			card->sd_bus_speed = UHS_DDR50_BUS_SPEED;
-	} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
-		    MMC_CAP_UHS_SDR50)) && (card->sw_caps.sd3_bus_mode &
-		    SD_MODE_UHS_SDR50)) {
+		} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
+						MMC_CAP_UHS_SDR50)) && (card->sw_caps.sd3_bus_mode &
+									SD_MODE_UHS_SDR50)) {
 			card->sd_bus_speed = UHS_SDR50_BUS_SPEED;
-	} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
-		    MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR25)) &&
-		   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR25)) {
+		} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
+						MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR25)) &&
+			   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR25)) {
 			card->sd_bus_speed = UHS_SDR25_BUS_SPEED;
-	} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
-		    MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR25 |
-		    MMC_CAP_UHS_SDR12)) && (card->sw_caps.sd3_bus_mode &
-		    SD_MODE_UHS_SDR12)) {
+		} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
+						MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR25 |
+						MMC_CAP_UHS_SDR12)) && (card->sw_caps.sd3_bus_mode &
+									SD_MODE_UHS_SDR12)) {
 			card->sd_bus_speed = UHS_SDR12_BUS_SPEED;
+		}
+	} else {
+		if ((card->host->caps & MMC_CAP_UHS_DDR50) &&
+		    (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_DDR50)) {
+			card->sd_bus_speed = UHS_DDR50_BUS_SPEED;
+		} else if ((card->host->caps & MMC_CAP_UHS_SDR104) &&
+			   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR104)) {
+			card->sd_bus_speed = UHS_SDR104_BUS_SPEED;
+		} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
+						MMC_CAP_UHS_SDR50)) && (card->sw_caps.sd3_bus_mode &
+									SD_MODE_UHS_SDR50)) {
+			card->sd_bus_speed = UHS_SDR50_BUS_SPEED;
+		} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
+						MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR25)) &&
+			   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR25)) {
+			card->sd_bus_speed = UHS_SDR25_BUS_SPEED;
+		} else if ((card->host->caps & (MMC_CAP_UHS_SDR104 |
+						MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_SDR25 |
+						MMC_CAP_UHS_SDR12)) && (card->sw_caps.sd3_bus_mode &
+									SD_MODE_UHS_SDR12)) {
+			card->sd_bus_speed = UHS_SDR12_BUS_SPEED;
+		}
 	}
 }
 
@@ -1102,20 +1126,176 @@ static int mmc_sd_alive(struct mmc_host *host)
 	return mmc_send_status(host->card, NULL);
 }
 
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+/*  Re-dectect when card unexcepted removed add by wanglanbin
+ */
+static int mmc_sd_re_detect(struct mmc_host *host)
+{
+	int err;
+	u32 ocr, rocr;
+
+	host->f_init = host->f_min;
+	mmc_power_up(host, host->ocr_avail);
+
+	mmc_go_idle(host);
+
+	mmc_send_if_cond(host, host->ocr_avail);
+
+	err = mmc_send_app_op_cond(host, 0, &ocr);
+	if (err)
+		return err;
+
+	/*
+	 * We need to get OCR a different way for SPI.
+	 */
+	if (mmc_host_is_spi(host)) {
+		mmc_go_idle(host);
+
+		err = mmc_spi_read_ocr(host, 0, &ocr);
+		if (err)
+			return err;
+	}
+
+	/*
+	 * Sanity check the voltages that the card claims to
+	 * support.
+	 */
+	if (ocr & 0x7F) {
+		pr_warn("%s: card claims to support voltages below the defined range. These will be ignored.\n",
+			mmc_hostname(host));
+		ocr &= ~0x7F;
+	}
+
+	if ((ocr & MMC_VDD_165_195) &&
+		!(host->ocr_avail_sd & MMC_VDD_165_195)) {
+		pr_warn("%s: SD card claims to support the incompletely defined 'low voltage range'. This will be ignored.\n",
+			mmc_hostname(host));
+		ocr &= ~MMC_VDD_165_195;
+	}
+
+	rocr = mmc_select_voltage(host, ocr);
+
+	/*
+	 * Can we support the voltage(s) of the card(s)?
+	 */
+	if (!rocr) {
+		err = -EINVAL;
+		return err;
+	}
+
+	err = mmc_sd_init_card(host, rocr, host->card);
+	if (err)
+		printk(KERN_ERR "%s : re-detect card failed !\n", mmc_hostname(host));
+
+	return err;
+}
+/* end */
+#endif
+
 /*
  * Card detection callback from host.
  */
 static void mmc_sd_detect(struct mmc_host *host)
 {
-	int err;
+	int err = 0;
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	int retries = 5;
+#endif
+	int card_detection = 1;
+	int fast_power_off = 0;
 
-	mmc_get_card(host->card, NULL);
+	printk(KERN_ERR "%s === %s === \n", mmc_hostname(host), __func__);
+
+	BUG_ON(!host);
+	BUG_ON(!host->card);
+
+	card_detection = mmc_gpio_get_status(host);
+	printk(KERN_ERR "%s card inserted: %d\n", mmc_hostname(host), card_detection);
+	fast_power_off = host->fast_power_off && (card_detection == 0);
+
+	/*
+	 * Try to acquire claim host. If failed to get the lock in 2 sec,
+	 * just return; This is to ensure that when this call is invoked
+	 * due to pm_suspend, not to block suspend for longer duration.
+	 * */
+	pm_runtime_get_sync(&host->card->dev);
+	if (!mmc_try_claim_host(host, NULL, 2000)) {
+		pm_runtime_mark_last_busy(&host->card->dev);
+		pm_runtime_put_autosuspend(&host->card->dev);
+		return;
+	}
+
+	if (host->ops->get_cd && !host->ops->get_cd(host)) {
+		err = -ENOMEDIUM;
+		mmc_card_set_removed(host->card);
+		mmc_card_clr_suspended(host->card);
+		goto out;
+	}
 
 	/*
 	 * Just check if our card has been removed.
 	 */
-	err = _mmc_detect_card_removed(host);
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	while (retries && !fast_power_off) {
+		err = mmc_send_status(host->card, NULL);
+		if (err) {
+			retries--;
+			udelay(5);
+			continue;
+		}
+		break;
+	}
+	if (!retries && !fast_power_off) {
+		printk(KERN_ERR "%s(%s): Unable to re-detect card (%d)\n",
+		       __func__, mmc_hostname(host), err);
+		//err = _mmc_detect_card_removed(host);
+		if(host->ops->get_reset_num && (host->ops->get_reset_num(host) > 2)){
+			pr_err("%s: reset_num > 2, remove SD\n", mmc_hostname(host));
+			mmc_card_set_removed(host->card);
+			err = -1;
+		} else
+			err = _mmc_detect_card_removed(host);
+		retries = 5;
+		/*add by liuruyi*/
+		while (err && retries) {
+			printk(KERN_ERR "%s : give a chance to re-detect card ! err(%d) retry(%d)\n",
+				mmc_hostname(host), err, retries);
+			mmc_power_off(host);
+			msleep(200);
+			err = mmc_sd_re_detect(host);
+			if (err) {
+				retries--;
+				continue;
+			}
+			break;
+		}
+		if (!retries) {
+			printk(KERN_ERR "%s : give 5 chance to re-detect card failed! err(%d)\n",
+				mmc_hostname(host), err);
+			mmc_card_set_removed(host->card);
+		}
+		/*end*/
+	}
+	if (fast_power_off){
+		//err = _mmc_detect_card_removed(host);
+		if(host->ops->get_reset_num && (host->ops->get_reset_num(host) > 2)){
+			pr_err("%s: reset_num > 2, remove SD\n", mmc_hostname(host));
+			mmc_card_set_removed(host->card);
+			err = -1;
+		} else
+			err = _mmc_detect_card_removed(host);
+	}
+#else
+	//err = _mmc_detect_card_removed(host);
+	if(host->ops->get_reset_num && (host->ops->get_reset_num(host) > 2)){
+		pr_err("%s: reset_num > 2, remove SD\n", mmc_hostname(host));
+		mmc_card_set_removed(host->card);
+		err = -1;
+	} else
+		err = _mmc_detect_card_removed(host);
+#endif
 
+out:
 	mmc_put_card(host->card, NULL);
 
 	if (err) {
@@ -1259,8 +1439,10 @@ int mmc_attach_sd(struct mmc_host *host)
 	WARN_ON(!host->claimed);
 
 	err = mmc_send_app_op_cond(host, 0, &ocr);
-	if (err)
+	if (err) {
+		printk(KERN_ERR "%s: mmc_send_app_op_cond ret = %d\n", mmc_hostname(host), err);
 		return err;
+	}
 
 	mmc_attach_bus(host, &mmc_sd_ops);
 	if (host->ocr_avail_sd)
@@ -1315,8 +1497,8 @@ remove_card:
 err:
 	mmc_detach_bus(host);
 
-	pr_err("%s: error %d whilst initialising SD card\n",
+	pr_err("%s: error %d whilst initialising SD card, set vivo bad_card=1\n",
 		mmc_hostname(host), err);
-
+	host->bad_card = 1;
 	return err;
 }

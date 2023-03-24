@@ -49,7 +49,7 @@ config SCSI_NETLINK
 
 config SCSI_MQ_DEFAULT
 	bool "SCSI: use blk-mq I/O path by default"
-	default y
+	default n
 	depends on SCSI
 	---help---
 	  This option enables the blk-mq based I/O path for SCSI devices by

@@ -42,11 +42,18 @@ static struct device_attribute power_supply_attrs[];
 
 static const char * const power_supply_type_text[] = {
 	"Unknown", "Battery", "UPS", "Mains", "USB",
+#ifdef CONFIG_VIVO_CHARGING_NEW_ARCH
+	"USB_DCP", "USB_CDP", "USB_ACA", "USB_TYPE_C",
+	"USB_PD", "USB_PD_DRP", "BrickID", "USB_HVDCP",
+	"OTG", "Wireless", "USB_FLOAT", "HV_Mains",
+	"Prepare_TA", "SMART_NOTG", "END"
+#else
 	"USB_DCP", "USB_CDP", "USB_ACA", "USB_C",
 	"USB_PD", "USB_PD_DRP", "BrickID",
 	"USB_HVDCP", "USB_HVDCP_3", "USB_HVDCP_3P5", "Wireless", "USB_FLOAT",
 	"BMS", "Parallel", "Main", "USB_C_UFP", "USB_C_DFP",
 	"Charge_Pump",
+#endif
 };
 
 static const char * const power_supply_usb_type_text[] = {
@@ -145,7 +152,7 @@ static ssize_t power_supply_show_property(struct device *dev,
 	ssize_t ret;
 	struct power_supply *psy = dev_get_drvdata(dev);
 	enum power_supply_property psp = attr - power_supply_attrs;
-	union power_supply_propval value;
+	union power_supply_propval value = {0,};
 
 	if (psp == POWER_SUPPLY_PROP_TYPE) {
 		value.intval = psy->desc->type;
@@ -511,6 +518,37 @@ static struct device_attribute power_supply_attrs[] = {
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_ATTR(charge_counter_ext),
 	POWER_SUPPLY_ATTR(charge_charger_state),
+#ifdef CONFIG_VIVO_CHARGING_NEW_ARCH
+	/* Add battery attr */
+	POWER_SUPPLY_ATTR(battery_id),
+	POWER_SUPPLY_ATTR(engine),
+	POWER_SUPPLY_ATTR(warning),
+	POWER_SUPPLY_ATTR(status_ex),
+	POWER_SUPPLY_ATTR(chg_type),
+	POWER_SUPPLY_ATTR(charge_voltage),
+	POWER_SUPPLY_ATTR(chg_est_vbat_diff),
+	POWER_SUPPLY_ATTR(primary_board_temp),
+	POWER_SUPPLY_ATTR(usb_conn_temp),
+	POWER_SUPPLY_ATTR(parallel_board_temp),
+	POWER_SUPPLY_ATTR(keep_chg_soc),
+	POWER_SUPPLY_ATTR(fixed_temp),
+	POWER_SUPPLY_ATTR(current_ac_avg_now),
+	POWER_SUPPLY_ATTR(switch_state),
+	POWER_SUPPLY_ATTR(calling_state),
+	POWER_SUPPLY_ATTR(weixin_calling_state),
+	POWER_SUPPLY_ATTR(factory_mode_state),
+	POWER_SUPPLY_ATTR(htccc_enable),
+	POWER_SUPPLY_ATTR(ex_fg_state),
+	POWER_SUPPLY_ATTR(supported_adapter),
+	POWER_SUPPLY_ATTR(charger_voltage),
+	POWER_SUPPLY_ATTR(chg_voltage),
+	POWER_SUPPLY_ATTR(charger_type),
+	POWER_SUPPLY_ATTR(voltage),
+	POWER_SUPPLY_ATTR(temperature),
+	POWER_SUPPLY_ATTR(current_spec_min),
+	POWER_SUPPLY_ATTR(current_spec_max),
+	POWER_SUPPLY_ATTR(exhibition_mode),
+#endif
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_ATTR(model_name),
 	POWER_SUPPLY_ATTR(ptmc_id),
@@ -518,6 +556,9 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(battery_type),
 	POWER_SUPPLY_ATTR(cycle_counts),
 	POWER_SUPPLY_ATTR(serial_number),
+#ifdef CONFIG_VIVO_CHARGING_NEW_ARCH
+	POWER_SUPPLY_ATTR(charging_info),
+#endif
 };
 
 static struct attribute *

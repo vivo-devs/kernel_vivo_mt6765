@@ -20,6 +20,10 @@
 #include <linux/module.h>
 #include <linux/reboot.h>
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+#include <trace/events/block.h>
+#endif
+
 #define DM_MSG_PREFIX			"verity"
 
 #define DM_VERITY_ENV_LENGTH		42
@@ -556,6 +560,16 @@ static void verity_finish_io(struct dm_verity_io *io, blk_status_t status)
 static void verity_work(struct work_struct *w)
 {
 	struct dm_verity_io *io = container_of(w, struct dm_verity_io, work);
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+	if (trace_block_bio_complete_enabled()) {
+		struct dm_verity *v = io->v;
+		struct bio *bio = dm_bio_from_per_bio_data(io, v->ti->per_io_data_size);
+
+		if (bio->bi_disk)
+			trace_block_bio_complete(bio->bi_disk->queue, bio, -201);
+	}
+#endif
 
 	verity_finish_io(io, errno_to_blk_status(verity_verify_io(io)));
 }

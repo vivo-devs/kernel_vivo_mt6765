@@ -1,0 +1,30 @@
+menu "BBK Driver Info class support"
+config BBK_INFO
+	tristate "BBK Info class config"
+	help
+	  Say Y here to enable driver info class support.
+if BBK_INFO
+
+config BBK_DRIVER_INFO
+	tristate "GPIO Driver Info"
+	help
+	  Say Y here to enable bbk driver info interface.
+
+config BBK_CARD_DETECT
+	tristate "GPIO Driver Info"
+	help
+	  Say Y here to enable bbk driver info interface.
+
+config BBK_BOARDS_VERSION
+	tristate "GPIO Driver Info"
+	help
+	  Say Y here to enable bbk driver info interface.
+
+endif # SWITCH
+#add by huaqin for simtray detect start
+config BBK_SIMTRAY_STATUS_DETECT
+	tristate "SIM tray status"
+	help
+	  Say y here to enable SIM tray GPIO detection
+#add by huaqin for simtray detect end
+endmenu

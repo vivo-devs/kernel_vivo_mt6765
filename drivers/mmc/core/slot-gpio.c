@@ -21,6 +21,7 @@
 #include "slot-gpio.h"
 
 struct mmc_gpio {
+	bool status;
 	struct gpio_desc *ro_gpio;
 	struct gpio_desc *cd_gpio;
 	bool override_ro_active_level;
@@ -31,14 +32,58 @@ struct mmc_gpio {
 	char cd_label[];
 };
 
+int mmc_gpio_get_status(struct mmc_host *host)
+{
+	int ret = -ENOSYS;
+	struct mmc_gpio *ctx = host->slot.handler_priv;
+
+	if (!ctx || !ctx->cd_gpio || !gpio_is_valid(desc_to_gpio(ctx->cd_gpio)))
+		goto out;
+
+	ret = !gpio_get_value_cansleep(desc_to_gpio(ctx->cd_gpio)) ^
+		!!(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH);
+out:
+	return ret;
+}
+EXPORT_SYMBOL(mmc_gpio_get_status);
+
 static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 {
 	/* Schedule a card detection after a debounce timeout */
 	struct mmc_host *host = dev_id;
-	struct mmc_gpio *ctx = host->slot.handler_priv;
 
+	struct mmc_gpio *ctx = host->slot.handler_priv;
+	int status;
+
+	/*
+	 * In case host->ops are not yet initialized return immediately.
+	 * The card will get detected later when host driver calls
+	 * mmc_add_host() after host->ops are initialized.
+	 */
+	if (host->int_cnt_enable)
+		host->int_cnt++;
+	if (!host->ops)
+		goto out;
+
+	if (host->ops->card_event)
+		host->ops->card_event(host);
+	status = mmc_gpio_get_status(host);
+	if (unlikely(status < 0))
+		goto out;
+	printk(KERN_ERR "%s: card detection.\n", mmc_hostname(host));
+	pr_info("%s: slot status change detected (%d -> %d), GPIO_ACTIVE_%s\n",
+		mmc_hostname(host), ctx->status, status,
+		(host->caps2 & MMC_CAP2_CD_ACTIVE_HIGH) ?
+		"HIGH" : "LOW");
+	ctx->status = status;
+
+	/* Schedule a card detection after a debounce timeout */
 	host->trigger_card_event = true;
-	mmc_detect_change(host, msecs_to_jiffies(ctx->cd_debounce_delay_ms));
+	if (!host->card)
+		mmc_detect_change(host, msecs_to_jiffies(2050));
+	else
+		mmc_detect_change(host, msecs_to_jiffies(host->fast_power_off?50:1000));
+out:
 
 	return IRQ_HANDLED;
 }
@@ -235,6 +280,10 @@ int mmc_gpio_request_cd(struct mmc_host *host, unsigned int gpio,
 
 	ctx->override_cd_active_level = true;
 	ctx->cd_gpio = gpio_to_desc(gpio);
+	ret = mmc_gpio_get_status(host);
+	if (ret < 0)
+		return ret;
+	ctx->status = ret;
 
 	return 0;
 }

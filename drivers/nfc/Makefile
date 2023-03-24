@@ -17,3 +17,6 @@ obj-$(CONFIG_NFC_ST_NCI)	+= st-nci/
 obj-$(CONFIG_NFC_NXP_NCI)	+= nxp-nci/
 obj-$(CONFIG_NFC_S3FWRN5)	+= s3fwrn5/
 obj-$(CONFIG_NFC_ST95HF)	+= st95hf/
+obj-$(CONFIG_NFC_SN100)		+= sn100/
+obj-$(CONFIG_SN100_SPI)	    += sn100_spi/
+obj-$(CONFIG_NFC_NQ)		+= nq-nci.o

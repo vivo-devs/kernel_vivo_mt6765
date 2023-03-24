@@ -36,6 +36,7 @@
 #include <linux/mmc/slot-gpio.h>
 
 #include "sdhci.h"
+#include "../core/mmc_vsm.h"
 
 #define DRIVER_NAME "sdhci"
 
@@ -114,6 +115,30 @@ void sdhci_dumpregs(struct sdhci_host *host)
 	}
 
 	SDHCI_DUMP("============================================\n");
+
+	if (host->mmc->slotno == 1) {
+		struct mmc_card *card = NULL;
+		struct mmc_host *mmc = NULL;
+
+		mmc = host->mmc;
+		if (mmc) {
+			card = host->mmc->card;
+		}
+
+		if (card) {
+			pr_info("%s: firmware_version:0x%08x\n", mmc_hostname(card->host),
+				card->ext_csd.firmware_version);
+			pr_info("%s: cid:%08x%08x%08x%08x\n", mmc_hostname(card->host),
+				card->raw_cid[0], card->raw_cid[1],card->raw_cid[2], card->raw_cid[3]);
+			pr_info("%s: dev_left_time:0x%02x\n", mmc_hostname(card->host),
+				card->ext_csd.dev_left_time);
+			pr_info("%s: dev_left_time_a:0x%02x\n", mmc_hostname(card->host),
+				card->ext_csd.dev_left_time_a);
+			pr_info("%s: dev_left_time_b:0x%02x\n", mmc_hostname(card->host),
+				card->ext_csd.dev_left_time_b);
+		}
+        }
+
 }
 EXPORT_SYMBOL_GPL(sdhci_dumpregs);
 
@@ -265,6 +290,7 @@ static void sdhci_init(struct sdhci_host *host, int soft)
 		host->clock = 0;
 		mmc->ops->set_ios(mmc, &mmc->ios);
 	}
+	pr_info("xiang--slotno = %d ", host->mmc->slotno);
 }
 
 static void sdhci_reinit(struct sdhci_host *host)
@@ -783,6 +809,10 @@ static u8 sdhci_calc_timeout(struct sdhci_host *host, struct mmc_command *cmd,
 	unsigned target_timeout, current_timeout;
 
 	*too_big = true;
+
+	/* bsp.memory-6.23 Set max timeout for samsung vendor command. */
+	if (cmd->opcode == MMC_READ_SINGLE_BLOCK && cmd->arg == VSM_SAMSUNG_ARG)
+		return 0xF;
 
 	/*
 	 * If the host controller provides us with an incorrect timeout

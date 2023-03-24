@@ -21,6 +21,9 @@
 #include <linux/export.h>
 #include <linux/leds.h>
 #include <linux/slab.h>
+#include <linux/sysfs.h>
+#include <linux/kobject.h>
+#include <linux/string.h>
 
 #include <linux/mmc/host.h>
 #include <linux/mmc/card.h>
@@ -361,6 +364,10 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 	int err;
 	struct mmc_host *host;
 
+#ifdef CONFIG_MTK_EMMC_CQ_SUPPORT
+	int i;
+#endif
+
 	host = kzalloc(sizeof(struct mmc_host) + extra, GFP_KERNEL);
 	if (!host)
 		return NULL;
@@ -388,7 +395,7 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 		put_device(&host->class_dev);
 		return NULL;
 	}
-
+	host->bad_card = 0;
 	spin_lock_init(&host->lock);
 	init_waitqueue_head(&host->wq);
 	INIT_DELAYED_WORK(&host->detect, mmc_rescan);
@@ -409,10 +416,77 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 	host->fixed_drv_type = -EINVAL;
 	host->ios.power_delay_ms = 10;
 
+#ifdef CONFIG_MTK_EMMC_CQ_SUPPORT
+	if (host->index == 0) {
+		for (i = 0; i < EMMC_MAX_QUEUE_DEPTH; i++)
+			host->areq_que[i] = NULL;
+
+		atomic_set(&host->areq_cnt, 0);
+		host->areq_cur = NULL;
+		host->done_mrq = NULL;
+		INIT_LIST_HEAD(&host->cmd_que);
+		INIT_LIST_HEAD(&host->dat_que);
+		spin_lock_init(&host->cmd_que_lock);
+		spin_lock_init(&host->dat_que_lock);
+		spin_lock_init(&host->que_lock);
+		init_waitqueue_head(&host->cmp_que);
+		init_waitqueue_head(&host->cmdq_que);
+	}
+#endif
+
 	return host;
 }
 
 EXPORT_SYMBOL(mmc_alloc_host);
+
+static ssize_t show_int_cnt_enable(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mmc_host *host = cls_dev_to_mmc_host(dev);
+
+	return sprintf(buf, "%d\n", host->int_cnt_enable);
+
+}
+
+static ssize_t store_int_cnt_enable(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct mmc_host *host = cls_dev_to_mmc_host(dev);
+	int val,ret;
+	ret = sscanf(buf, "%d", &val);
+	if (ret <= 0)
+		return (ret < 0) ? ret : -EINVAL;
+
+	/* We need this check due to input value is u64 */
+	if (val < 0)
+		return -EINVAL;
+
+	mmc_claim_host(host);
+	host->int_cnt_enable = val;
+	if (val == 1)
+		host->int_cnt = 0;
+	mmc_release_host(host);
+
+	return count;
+}
+
+static ssize_t show_int_cnt(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mmc_host	*host = cls_dev_to_mmc_host(dev);
+
+	return sprintf(buf, "%d\n", host->int_cnt);
+}
+
+DEVICE_ATTR(int_cnt_enable, 0644,
+		show_int_cnt_enable, store_int_cnt_enable);
+DEVICE_ATTR(int_cnt, 0644,
+		show_int_cnt, NULL);
+static struct attribute *dev_attrs[] = {
+	&dev_attr_int_cnt_enable.attr,
+	&dev_attr_int_cnt.attr,
+	NULL,
+};
+static struct attribute_group dev_attr_grp = {
+	.attrs = dev_attrs,
+};
 
 /**
  *	mmc_add_host - initialise host hardware
@@ -438,6 +512,11 @@ int mmc_add_host(struct mmc_host *host)
 #ifdef CONFIG_DEBUG_FS
 	mmc_add_host_debugfs(host);
 #endif
+
+	err = sysfs_create_group(&host->class_dev.kobj, &dev_attr_grp);
+	if (err)
+		pr_err("%s: failed to create sysfs group with err %d\n",
+												__func__, err);
 
 	mmc_start_host(host);
 	if (!(host->pm_flags & MMC_PM_IGNORE_PM_NOTIFY))
@@ -466,6 +545,7 @@ void mmc_remove_host(struct mmc_host *host)
 	mmc_remove_host_debugfs(host);
 #endif
 
+	sysfs_remove_group(&host->parent->kobj, &dev_attr_grp);
 	device_del(&host->class_dev);
 
 	led_trigger_unregister_simple(host->led);

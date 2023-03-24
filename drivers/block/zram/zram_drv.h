@@ -41,6 +41,7 @@
  */
 #define ZRAM_FLAG_SHIFT 24
 
+// be careful: if is 32 bit, the unsigned long flags maybe overflow
 /* Flags for zram pages (table[page_no].flags) */
 enum zram_pageflags {
 	/* zram slot is locked */
@@ -50,7 +51,6 @@ enum zram_pageflags {
 	ZRAM_UNDER_WB,	/* page is under writeback */
 	ZRAM_HUGE,	/* Incompressible page */
 	ZRAM_IDLE,	/* not accessed page since last idle marking */
-
 	__NR_ZRAM_PAGEFLAGS,
 };
 
@@ -63,7 +63,7 @@ struct zram_table_entry {
 		unsigned long element;
 	};
 	unsigned long flags;
-#ifdef CONFIG_ZRAM_MEMORY_TRACKING
+#if defined(CONFIG_ZRAM_MEMORY_TRACKING)
 	ktime_t ac_time;
 #endif
 };
