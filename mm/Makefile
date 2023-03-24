@@ -46,6 +46,10 @@ obj-y			:= filemap.o mempool.o oom_kill.o fadvise.o \
 
 obj-y += init-mm.o
 
+ifeq ($(CONFIG_MTK_ION),y)
+subdir-ccflags-y += -I$(srctree)/drivers/staging/android/mtk_ion/
+endif
+
 ifdef CONFIG_NO_BOOTMEM
 	obj-y		+= nobootmem.o
 else

@@ -111,6 +111,9 @@
 #include <linux/kasan.h>
 #include <linux/kmemleak.h>
 #include <linux/memory_hotplug.h>
+#ifdef CONFIG_PROC_FS
+#include <linux/proc_fs.h>
+#endif
 
 /*
  * Kmemleak configuration and common defines.
@@ -2096,6 +2099,28 @@ void __init kmemleak_init(void)
 	}
 }
 
+#ifdef CONFIG_PROC_FS
+static struct proc_dir_entry *proc_root;
+static int kmemleak_init_procfs(void)
+{
+	struct proc_dir_entry *proc_file;
+	proc_root = proc_mkdir("kmem", NULL);
+	if (!proc_root) {
+		pr_err("failed to create kmemleak procfs root directory.\n");
+	}
+
+	/*
+	 * This node is for userspace read.
+	 */
+	proc_file = proc_create("kmemleak", S_IFREG | 0644,
+				     proc_root, &kmemleak_fops);
+	if (!proc_file)
+		pr_err("Failed to create procfs at /proc/kmem/kmemleak\n");
+
+	return 0;
+}
+#endif
+
 /*
  * Late initialization function.
  */
@@ -2109,6 +2134,10 @@ static int __init kmemleak_late_init(void)
 				     &kmemleak_fops);
 	if (!dentry)
 		pr_warn("Failed to create the debugfs kmemleak file\n");
+
+#ifdef CONFIG_PROC_FS
+	kmemleak_init_procfs();
+#endif
 
 	if (kmemleak_error) {
 		/*

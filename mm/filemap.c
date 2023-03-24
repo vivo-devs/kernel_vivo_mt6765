@@ -2559,6 +2559,18 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 	return fpin;
 }
 
+#define NS_TO_MS(x)	(div64_u64((x), 1000000UL))
+#define NS_TO_US(x)	(div64_u64((x), 1000UL))
+#define PATH_LEN	(60)
+
+static unsigned int time_threshold_fg = 300;
+module_param_named(threshold_fg, time_threshold_fg, uint,
+             S_IRUGO | S_IWUSR);
+
+static unsigned int time_threshold = 300;
+module_param_named(threshold, time_threshold, uint,
+             S_IRUGO | S_IWUSR);
+
 /**
  * filemap_fault - read in file data for page fault handling
  * @vmf:	struct vm_fault containing details of the fault
@@ -2593,11 +2605,19 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	pgoff_t offset = vmf->pgoff;
 	pgoff_t max_off;
 	struct page *page;
+	unsigned long start, now;
+	unsigned long nvcsw, nivcsw;
+	unsigned int threshold;
+	int found = -1, group = -1;
 	vm_fault_t ret = 0;
 
 	max_off = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
 	if (unlikely(offset >= max_off))
 		return VM_FAULT_SIGBUS;
+
+	start = jiffies;
+	nvcsw = current->nvcsw;
+	nivcsw = current->nivcsw;
 
 	/*
 	 * Do we have something in the page cache already?
@@ -2608,9 +2628,12 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 		 * We found the page, so try async readahead before
 		 * waiting for the lock.
 		 */
+		found = 1;
 		fpin = do_async_mmap_readahead(vmf, page);
 	} else if (!page) {
 		/* No page in the page cache at all */
+		found = 0;
+
 		count_vm_event(PGMAJFAULT);
 		count_memcg_event_mm(vmf->vma->vm_mm, PGMAJFAULT);
 		ret = VM_FAULT_MAJOR;
@@ -2628,6 +2651,59 @@ retry_find:
 
 	if (!lock_page_maybe_drop_mmap(vmf, page, &fpin))
 		goto out_retry;
+
+	now = jiffies;
+	threshold = time_threshold_fg;
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+	if (time_after_eq(now, start + msecs_to_jiffies(threshold))) {
+		struct cgroup_subsys_state *css;
+		struct blkcg *blkcg;
+		char *p;
+		char buf[200] = {0};
+		s64 iowait = 0;
+		u64 delay = 0;
+
+#ifdef CONFIG_TASK_DELAY_ACCT
+		struct task_delay_info *delays = current->delays;
+
+		if (delays) {
+			iowait = delays->blkio_last;
+			delay = delays->blkio_delay;
+		}
+#endif
+
+		rcu_read_lock();
+		css = kthread_blkcg();
+		if (css)
+			blkcg = css_to_blkcg(css);
+		else
+			blkcg = css_to_blkcg(task_css(current, io_cgrp_id));
+
+		if (!blkcg)
+			group = 0;
+		else
+			group = blkcg->priority;
+		rcu_read_unlock();
+
+		p = file_path(file, buf, sizeof(buf));
+		if (IS_ERR(p))
+			p = "?";
+
+		if (strlen(p) > PATH_LEN)
+			p += strlen(p) - PATH_LEN;
+
+		pr_info("BTO: fault cost %ums "
+				"F=%d Path=%s +%#lx [%lu %lu] G=%d "
+				"[%d %d] (%s) (%s) iow=%lldus total=%llums\n",
+				jiffies_to_msecs(now - start),
+				found, p, offset,
+				current->nvcsw - nvcsw, current->nivcsw - nivcsw, group,
+				current->pid, current->tgid, current->comm,
+				current->group_leader->comm,
+				NS_TO_US(iowait), NS_TO_MS(delay));
+	}
+#endif
 
 	/* Did it get truncated? */
 	if (unlikely(page->mapping != mapping)) {

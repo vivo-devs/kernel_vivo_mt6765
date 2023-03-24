@@ -37,7 +37,9 @@
 #include <linux/sched/rt.h>
 #include <linux/sched/signal.h>
 #include <linux/mm_inline.h>
+#include <linux/module.h>
 #include <trace/events/writeback.h>
+#include <mt-plat/mtk_blocktag.h>
 
 #include "internal.h"
 
@@ -1550,6 +1552,14 @@ static inline void wb_dirty_limits(struct dirty_throttle_control *dtc)
 	}
 }
 
+#define DIRTY_INTERVAL	(HZ/8)
+
+static int multi4dirty = 3;
+module_param_named(multi4dirty, multi4dirty, int, 0644);
+
+static int div4dirty = 2;
+module_param_named(div4dirty, div4dirty, int, 0644);
+
 /*
  * balance_dirty_pages() must be called by processes which are generating dirty
  * data.  It looks at the number of dirty pages in the machine and will force
@@ -1634,6 +1644,23 @@ static void balance_dirty_pages(struct bdi_writeback *wb,
 				m_dirty = mdtc->dirty;
 				m_thresh = mdtc->thresh;
 				m_bg_thresh = mdtc->bg_thresh;
+			}
+		}
+
+		if (!strictlimit && dirty > (bg_thresh * multi4dirty / div4dirty)) {
+			if (time_is_before_jiffies(current->call_jiffies + DIRTY_INTERVAL)) {
+				current->call_jiffies = jiffies;
+
+				pr_info("BTO: bdi %s: Dirty=%lu Writeback=%lu Avail=%lu "
+						"bg_thresh=%lu thresh=%lu "
+						"pages=%lu "
+						"<%d %d> <%s> <%s>\n",
+						bdi_dev_name(wb->bdi),
+						gdtc->dirty, gdtc->dirty - nr_reclaimable, gdtc->avail,
+						gdtc->bg_thresh, gdtc->thresh,
+						pages_dirtied,
+						current->pid, current->tgid, current->comm,
+						current->group_leader->comm);
 			}
 		}
 
@@ -2427,6 +2454,13 @@ void account_page_dirtied(struct page *page, struct address_space *mapping)
 		task_io_account_write(PAGE_SIZE);
 		current->nr_dirtied++;
 		this_cpu_inc(bdp_ratelimits);
+
+		/*
+		 * Dirty pages may be written by writeback thread later.
+		 * To get real i/o owner of this page, we shall keep it
+		 * before writeback takes over.
+		 */
+		mtk_btag_pidlog_set_pid(page);
 	}
 }
 EXPORT_SYMBOL(account_page_dirtied);

@@ -67,11 +67,16 @@
 #include <linux/lockdep.h>
 #include <linux/nmi.h>
 #include <linux/psi.h>
+#include <linux/timekeeping.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
 #include "internal.h"
+
+#if defined(CONFIG_DMAUSER_PAGES)
+#include <mt-plat/aee.h>
+#endif
 
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
@@ -2348,7 +2353,7 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 	 * Limit the number reserved to 1 pageblock or roughly 1% of a zone.
 	 * Check is race-prone but harmless.
 	 */
-	max_managed = (zone->managed_pages / 100) + pageblock_nr_pages;
+	max_managed = (zone->managed_pages / 100) + pageblock_nr_pages * 2;
 	if (zone->nr_reserved_highatomic >= max_managed)
 		return;
 
@@ -2398,7 +2403,7 @@ static bool unreserve_highatomic_pageblock(const struct alloc_context *ac,
 		 * is really high.
 		 */
 		if (!force && zone->nr_reserved_highatomic <=
-					pageblock_nr_pages)
+					pageblock_nr_pages * 2)
 			continue;
 
 		spin_lock_irqsave(&zone->lock, flags);
@@ -3141,7 +3146,8 @@ struct page *rmqueue(struct zone *preferred_zone,
 	if (likely(order == 0)) {
 		page = rmqueue_pcplist(preferred_zone, zone, order,
 				gfp_flags, migratetype);
-		goto out;
+		if (page || !(alloc_flags & ALLOC_HARDER))
+			goto out;
 	}
 
 	/*
@@ -3302,7 +3308,8 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 		if (alloc_flags & ALLOC_OOM)
 			min -= min / 2;
 		else
-			min -= min / 4;
+			min -= min / 2;
+			/* HARDER should try best*/
 	}
 
 
@@ -3369,13 +3376,6 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 		unsigned long mark, int classzone_idx, unsigned int alloc_flags)
 {
 	long free_pages = zone_page_state(z, NR_FREE_PAGES);
-	long cma_pages = 0;
-
-#ifdef CONFIG_CMA
-	/* If allocation can't use CMA areas don't use free CMA pages */
-	if (!(alloc_flags & ALLOC_CMA))
-		cma_pages = zone_page_state(z, NR_FREE_CMA_PAGES);
-#endif
 
 	/*
 	 * Fast check for order-0 only. If this fails then the reserves
@@ -3384,8 +3384,24 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 	 * the caller is !atomic then it'll uselessly search the free
 	 * list. That corner case is then slower but it is harmless.
 	 */
-	if (!order && (free_pages - cma_pages) > mark + z->lowmem_reserve[classzone_idx])
-		return true;
+	if (!order) {
+		const bool alloc_harder = (alloc_flags & (ALLOC_HARDER|ALLOC_OOM));
+		long unused_free_pages = 0;
+
+#ifdef CONFIG_CMA
+		/* If allocation can't use CMA areas don't use free CMA pages */
+		if (!(alloc_flags & ALLOC_CMA))
+			unused_free_pages += zone_page_state(z, NR_FREE_CMA_PAGES);
+#endif
+
+		if (likely(!alloc_harder))
+			unused_free_pages += z->nr_reserved_highatomic;
+
+
+
+		if (free_pages > (mark + z->lowmem_reserve[classzone_idx] + unused_free_pages))
+			return true;
+	}
 
 	return __zone_watermark_ok(z, order, mark, classzone_idx, alloc_flags,
 					free_pages);
@@ -3523,7 +3539,7 @@ try_this_zone:
 			 * If this is a high-order atomic allocation then check
 			 * if the pageblock should be reserved for the future
 			 */
-			if (unlikely(order && (alloc_flags & ALLOC_HARDER)))
+			if (unlikely(alloc_flags & ALLOC_HARDER))
 				reserve_highatomic_pageblock(page, zone, order);
 
 			return page;
@@ -4382,9 +4398,12 @@ retry:
 	if (costly_order && !(gfp_mask & __GFP_RETRY_MAYFAIL))
 		goto nopage;
 
+
 	if (should_reclaim_retry(gfp_mask, order, ac, alloc_flags,
-				 did_some_progress > 0, &no_progress_loops))
+				 did_some_progress > 0, &no_progress_loops)) {
+
 		goto retry;
+	}
 
 	/*
 	 * It doesn't make any sense to retry for the compaction if the order-0
@@ -4528,6 +4547,9 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 {
 	struct page *page;
 	unsigned int alloc_flags = ALLOC_WMARK_LOW;
+#ifdef CONFIG_DMAUSER_PAGES
+	static bool __section(.data.unlikely) __dmawarned;
+#endif
 	gfp_t alloc_mask; /* The gfp_t that was actually used for allocation */
 	struct alloc_context ac = { };
 
@@ -4548,7 +4570,9 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 	finalise_ac(gfp_mask, &ac);
 
 	/* First allocation attempt */
+
 	page = get_page_from_freelist(alloc_mask, order, alloc_flags, &ac);
+
 	if (likely(page))
 		goto out;
 
@@ -4578,7 +4602,19 @@ out:
 	}
 
 	trace_mm_page_alloc(page, order, alloc_mask, ac.migratetype);
-
+#if defined(CONFIG_DMAUSER_PAGES)
+	/*
+	 * make sure DMA pages cannot be allocated to non-GFP_DMA users
+	 */
+	if (page && !(gfp_mask & GFP_DMA) &&
+			(page_zonenum(page) == OPT_ZONE_DMA)) {
+		if (unlikely(!__dmawarned)) {
+			__dmawarned = true;
+			aee_kernel_warning("large memory",
+					"out of high-end memory");
+		}
+	}
+#endif
 	return page;
 }
 EXPORT_SYMBOL(__alloc_pages_nodemask);
@@ -7561,6 +7597,17 @@ int __meminit init_per_zone_wmark_min(void)
 	return 0;
 }
 core_initcall(init_per_zone_wmark_min)
+
+void reinit_per_zone_wmark_min(void)
+{
+#if 1
+	setup_per_zone_wmarks();
+	refresh_zone_stat_thresholds();
+	setup_per_zone_lowmem_reserve();
+	pr_info("[memory debug] zone managed pages changes need reinit zone wmark");
+#endif
+}
+
 
 /*
  * min_free_kbytes_sysctl_handler - just a wrapper around proc_dointvec() so

@@ -46,6 +46,10 @@
 #include "internal.h"
 #include "slab.h"
 
+#ifdef CONFIG_MTK_ION
+#include <mtk/ion_drv.h>
+#endif
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/oom.h>
 
@@ -446,8 +450,12 @@ static void dump_header(struct oom_control *oc, struct task_struct *p)
 		if (is_dump_unreclaim_slabs())
 			dump_unreclaimable_slab();
 	}
-	if (sysctl_oom_dump_tasks)
+	if (sysctl_oom_dump_tasks) {
 		dump_tasks(oc->memcg, oc->nodemask);
+#ifdef CONFIG_MTK_ION
+		ion_mm_heap_memory_detail();
+#endif
+	}
 }
 
 /*
@@ -1123,8 +1131,12 @@ bool out_of_memory(struct oom_control *oc)
 		 * system level, we cannot survive this and will enter
 		 * an endless loop in the allocator. Bail out now.
 		 */
-		if (!is_sysrq_oom(oc) && !is_memcg_oom(oc))
+		if (!is_sysrq_oom(oc) && !is_memcg_oom(oc)) {
+#ifdef CONFIG_PAGE_OWNER
+			print_max_page_owner();
+#endif
 			panic("System is deadlocked on memory\n");
+		}
 	}
 	if (oc->chosen && oc->chosen != (void *)-1UL)
 		oom_kill_process(oc, !is_memcg_oom(oc) ? "Out of memory" :
