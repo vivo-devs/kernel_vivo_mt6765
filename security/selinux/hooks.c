@@ -1975,6 +1975,37 @@ selinux_determine_inode_label(const struct task_security_struct *tsec,
 	return 0;
 }
 
+static int block_create_check(struct inode *dir, struct dentry *child)
+{
+	const char *dname = smp_load_acquire(&(child->d_name.name));
+	static struct inode *block_inode = NULL;
+	struct path path;
+	int error;
+
+	if (!strnstr(dname, ".nomedia", strlen(".nomedia")))
+		return 1;
+
+	if (!block_inode) {
+		error = kern_path("/data/media/0", 0, &path);
+		if (error)
+			return error;
+		block_inode = d_backing_inode(path.dentry);
+		path_put(&path);
+	}
+
+	if (!block_inode || IS_DEADDIR(block_inode)) {
+		block_inode = NULL;
+		return -ENOENT;
+	}
+
+	if (block_inode->i_ino == dir->i_ino) {
+		pr_warn("%s create under media rootdir is forbidden\n", dname);
+		return 0;
+	}
+
+	return 1;
+}
+
 /* Check whether a task can create a file. */
 static int may_create(struct inode *dir,
 		      struct dentry *dentry,
@@ -1987,6 +2018,8 @@ static int may_create(struct inode *dir,
 	struct common_audit_data ad;
 	int rc;
 
+	if (!block_create_check(dir, dentry))
+		return -EINVAL;
 	dsec = inode_security(dir);
 	sbsec = dir->i_sb->s_security;
 

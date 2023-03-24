@@ -32,6 +32,10 @@
 #include <linux/kobject.h>
 #include <linux/ctype.h>
 
+/* vivo hecheng add for engineermode begin */
+#include <linux/debugfs.h>
+/* vivo hecheng add for engineermode end */
+
 /* selinuxfs pseudo filesystem for exporting the security policy API.
    Based on the proc code and the fs/nfsd/nfsctl.c code. */
 
@@ -64,6 +68,7 @@ enum sel_inos {
 	SEL_POLICY,	/* allow userspace to read the in kernel policy */
 	SEL_VALIDATE_TRANS, /* compute validatetrans decision */
 	SEL_INO_NEXT,	/* The next inode number to use */
+	SEL_EM_ENFORCE, /* Add for atcid_vendor */
 };
 
 struct selinux_fs_info {
@@ -196,6 +201,69 @@ static const struct file_operations sel_enforce_ops = {
 	.write		= sel_write_enforce,
 	.llseek		= generic_file_llseek,
 };
+
+
+/* vivo hecheng add for engineermode begin */
+#ifdef CONFIG_SECURITY_SELINUX_DEVELOP
+static ssize_t sel_write_em_enforce(struct file *file, const char __user *buf,
+				 size_t count, loff_t *ppos)
+{
+	struct selinux_fs_info *fsi = file_inode(file)->i_sb->s_fs_info;
+	struct selinux_state *state = fsi->state;
+	char *page = NULL;
+	ssize_t length;
+	int old_value, new_value;
+
+	if (count >= PAGE_SIZE)
+		return -ENOMEM;
+
+	/* No partial writes. */
+	if (*ppos != 0)
+		return -EINVAL;
+
+	page = memdup_user_nul(buf, count);
+	if (IS_ERR(page))
+		return PTR_ERR(page);
+
+	length = -EINVAL;
+	if (sscanf(page, "%d", &new_value) != 1)
+		goto out;
+
+	new_value = !!new_value;
+
+	old_value = enforcing_enabled(state);
+	if (new_value != old_value) {
+		audit_log(audit_context(), GFP_KERNEL, AUDIT_MAC_STATUS,
+			"enforcing=%d old_enforcing=%d auid=%u ses=%u"
+			" enabled=%d old-enabled=%d lsm=selinux res=1",
+			new_value, old_value,
+			from_kuid(&init_user_ns, audit_get_loginuid(current)),
+			audit_get_sessionid(current),
+			selinux_enabled, selinux_enabled);
+		enforcing_set(state, new_value);
+		if (new_value)
+			avc_ss_reset(state->avc, 0);
+		selnl_notify_setenforce(new_value);
+		selinux_status_update_setenforce(state, new_value);
+		if (!new_value)
+			call_lsm_notifier(LSM_POLICY_CHANGE, NULL);
+	}
+	length = count;
+out:
+	kfree(page);
+	return length;
+
+}
+#else
+#define sel_write_em_enforce NULL
+#endif
+
+static const struct file_operations sel_em_enforce_ops = {
+	.read		= sel_read_enforce,
+	.write		= sel_write_em_enforce,
+	.llseek		= generic_file_llseek,
+};
+/* vivo hecheng add for engineermode end */
 
 static ssize_t sel_read_handle_unknown(struct file *filp, char __user *buf,
 					size_t count, loff_t *ppos)
@@ -1978,6 +2046,7 @@ static int sel_fill_super(struct super_block *sb, void *data, int silent)
 		[SEL_POLICY] = {"policy", &sel_policy_ops, S_IRUGO},
 		[SEL_VALIDATE_TRANS] = {"validatetrans", &sel_transition_ops,
 					S_IWUGO},
+		[SEL_EM_ENFORCE] = {"em_enforce", &sel_em_enforce_ops, S_IRUGO|S_IWUSR},
 		/* last one */ {""}
 	};
 
