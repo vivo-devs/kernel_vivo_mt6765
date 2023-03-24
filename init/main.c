@@ -92,6 +92,7 @@
 #include <linux/rodata_test.h>
 #include <linux/jump_label.h>
 #include <linux/mem_encrypt.h>
+#include <linux/bootprof.h>
 
 #include <asm/io.h>
 #include <asm/bugs.h>
@@ -118,6 +119,17 @@ bool early_boot_irqs_disabled __read_mostly;
 
 enum system_states system_state __read_mostly;
 EXPORT_SYMBOL(system_state);
+unsigned int is_atboot;
+EXPORT_SYMBOL(is_atboot);
+unsigned int bsp_test_mode;
+EXPORT_SYMBOL(bsp_test_mode);
+static void is_at_boot(char *command_line);
+// for tp yizhi
+unsigned int power_off_charging_mode;
+EXPORT_SYMBOL(power_off_charging_mode);
+
+
+
 
 /*
  * Boot command-line arguments
@@ -576,6 +588,8 @@ asmlinkage __visible void __init start_kernel(void)
 	setup_arch(&command_line);
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
+	/* AT mode */
+	is_at_boot(command_line);
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
@@ -904,17 +918,24 @@ static inline void do_trace_initcall_finish(initcall_t fn, int ret)
 }
 #endif /* !TRACEPOINTS_ENABLED */
 
+
 int __init_or_module do_one_initcall(initcall_t fn)
 {
 	int count = preempt_count();
 	char msgbuf[64];
 	int ret;
+#ifdef CONFIG_MTPROF
+	unsigned long long ts;
+#endif
 
 	if (initcall_blacklisted(fn))
 		return -EPERM;
 
 	do_trace_initcall_start(fn);
+	BOOTPROF_TIME_LOG_START(ts);
 	ret = fn();
+	BOOTPROF_TIME_LOG_END(ts);
+	bootprof_initcall(fn, ts);
 	do_trace_initcall_finish(fn, ret);
 
 	msgbuf[0] = 0;
@@ -1088,6 +1109,34 @@ static inline void mark_readonly(void)
 }
 #endif
 
+// vivo wuzengshun add for recovery & survival mode begin
+unsigned int os_in_recovery_mode;
+EXPORT_SYMBOL(os_in_recovery_mode);
+static int __init recoverymode_detection(char *str)
+{
+	if (str && *str == '1') {
+		os_in_recovery_mode = 1;
+		printk("!!! system is in recovery mode !!!\n");
+	}
+	return 0;
+}
+
+__setup("recoverymode=", recoverymode_detection);
+
+unsigned int os_boot_puresys;
+EXPORT_SYMBOL(os_boot_puresys);
+static int __init boot_puresys_detection(char *str)
+{
+	if (str && *str == '1') {
+		os_boot_puresys = 1;
+		printk("!!! system is in puresys mode !!!\n");
+	}
+	return 0;
+}
+
+__setup("boot_puresys=", boot_puresys_detection);
+// vivo wuzengshun add for recovery & survival mode end
+
 static int __ref kernel_init(void *unused)
 {
 	int ret;
@@ -1110,6 +1159,8 @@ static int __ref kernel_init(void *unused)
 	numa_default_policy();
 
 	rcu_end_inkernel_boot();
+
+	bootprof_log_boot("Kernel_init_done");
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
@@ -1208,4 +1259,21 @@ static noinline void __init kernel_init_freeable(void)
 
 	integrity_load_keys();
 	load_default_modules();
+}
+
+/* AT mode */
+static void __init is_at_boot(char *command_line)
+{
+	if (strnstr(command_line, "boot_bsptmode=1", strlen(command_line)) == NULL) {
+		bsp_test_mode = 0;
+	} else {
+		bsp_test_mode = 1;
+	}
+
+	if (strnstr(command_line, "sendAT", strlen(command_line))) {
+		is_atboot = 1;
+		pr_warn("AT Mode Boot & Factory mode\n");
+	} else {
+		is_atboot = 0;
+	}
 }
