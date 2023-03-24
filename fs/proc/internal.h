@@ -208,6 +208,7 @@ struct pde_opener {
 extern const struct inode_operations proc_link_inode_operations;
 
 extern const struct inode_operations proc_pid_link_inode_operations;
+extern const struct file_operations proc_reclaim_operations;
 
 void proc_init_kmemcache(void);
 void set_proc_pid_nlink(void);
@@ -293,6 +294,12 @@ struct proc_maps_private {
 	struct mm_struct *mm;
 #ifdef CONFIG_MMU
 	struct vm_area_struct *tail_vma;
+	unsigned long last_end;
+	unsigned long start;
+	unsigned long total;
+	unsigned long free;
+	unsigned long max_free;
+	unsigned int len[8];
 #endif
 #ifdef CONFIG_NUMA
 	struct mempolicy *task_mempolicy;
@@ -302,6 +309,7 @@ struct proc_maps_private {
 struct mm_struct *proc_mem_open(struct inode *inode, unsigned int mode);
 
 extern const struct file_operations proc_pid_maps_operations;
+extern const struct file_operations proc_pid_virt_operations;
 extern const struct file_operations proc_pid_numa_maps_operations;
 extern const struct file_operations proc_pid_smaps_operations;
 extern const struct file_operations proc_pid_smaps_rollup_operations;

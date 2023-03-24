@@ -155,9 +155,141 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
+static int meminfo_quick_proc_show(struct seq_file *m, void *v)
+{
+	struct sysinfo i;
+	long cached;
+	unsigned long reserved = 0;
+#define K(x) ((x) << (PAGE_SHIFT - 10))
+	si_meminfo(&i);
+	si_swapinfo(&i);
+	cached = global_node_page_state(NR_FILE_PAGES) -
+			total_swapcache_pages() - i.bufferram;
+	if (cached < 0)
+		cached = 0;
+	seq_printf(m,
+		"%lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu\n",
+		K(i.totalram),
+		K(i.freeram),
+		K(i.bufferram),
+		K(cached),
+		K(i.sharedram),
+		/* upper are compatitable for old version */
+		/* 5: swap total */
+		K(i.totalswap),
+		/* 6: swap free */
+		K(i.freeswap),
+		/* 7: anon pages */
+		K(global_node_page_state(NR_ANON_MAPPED)),
+		/* 8: file mapped pages */
+		K(global_node_page_state(NR_FILE_MAPPED)),
+		/* 9: slab reclaimable */
+		K(global_node_page_state(NR_SLAB_RECLAIMABLE)),
+		/* 10: slab unreclaimable */
+		K(global_node_page_state(NR_SLAB_UNRECLAIMABLE)),
+		/* 11: kernel stack */
+		global_zone_page_state(NR_KERNEL_STACK_KB),
+		/* 12: page tables */
+		K(global_zone_page_state(NR_PAGETABLE)),
+#ifdef CONFIG_RSC_MEM_STAT
+		/* 13: ion free */
+		K((unsigned long)atomic_read(&rsc_ion_pool_pages) +
+									(atomic_long_read(&rsc_ion_head_free_list_size) >> PAGE_SHIFT)),
+		/* 14: gpu free */
+		K((unsigned long)rsc_kgsl_pool_size_total()),
+#ifdef CONFIG_ZCACHE
+		/* 15: zcache total */
+		K((unsigned long)zcache_pages()),
+#else
+		/* 15: zcache total */
+		reserved,
+#endif
+#else
+		/* 13: ion free */
+		reserved,
+		/* 14: gpu free */
+		reserved,
+		/* 15: zcache total */
+		reserved,
+#endif
+		/* 16: reserved */
+		reserved,
+		/* 17: reserved */
+		reserved,
+		/* 18: reserved */
+		reserved,
+		/* 19: reserved */
+		reserved,
+		/* 20: reserved */
+		reserved,
+		/* 21: reserved */
+		reserved,
+		/* 22: reserved */
+		reserved,
+		/* 23: reserved */
+		reserved,
+		/* 24: reserved */
+		reserved,
+		/* 25: reserved */
+		reserved,
+		/* 26: reserved */
+		reserved,
+		/* 27: reserved */
+		reserved,
+		/* 28: reserved */
+		reserved,
+		/* 29: reserved */
+		reserved,
+		/* 30: reserved */
+		reserved
+		);
+	return 0;
+
+#undef K
+}
+
+static int meminfo_quick_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, meminfo_quick_proc_show, NULL);
+}
+
+static const struct file_operations meminfo_quick_proc_fops = {
+	.open		= meminfo_quick_proc_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+#if defined(CONFIG_RMS_ION_STAT)
+static int rms_version_proc_show(struct seq_file *m, void *v)
+{
+	int version = 800;
+	int other1 = 0;
+	int other2 = 0;
+	seq_printf(m, "%d %d %d\n", version, other1, other2);
+	return 0;
+}
+
+static int rms_version_proc_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, rms_version_proc_show, NULL);
+}
+
+static const struct file_operations rms_version_proc_fops = {
+	.open		= rms_version_proc_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+#endif
+
 static int __init proc_meminfo_init(void)
 {
 	proc_create_single("meminfo", 0, NULL, meminfo_proc_show);
+	proc_create("meminfo_quick", S_IRUGO, NULL, &meminfo_quick_proc_fops);
+#if defined(CONFIG_RMS_ION_STAT) && defined(CONFIG_RSC_MEM_STAT)
+	proc_create("meminfo_version", 0444, NULL, &rms_version_proc_fops);
+#endif
 	return 0;
 }
 fs_initcall(proc_meminfo_init);
