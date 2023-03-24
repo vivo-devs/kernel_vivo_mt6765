@@ -102,4 +102,8 @@ config BFQ_GROUP_IOSCHED
 
 endmenu
 
+config BLK_ENHANCEMENT
+	bool "block layer enhance"
+	default y
+
 endif

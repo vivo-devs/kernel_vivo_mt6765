@@ -187,6 +187,9 @@ static bool blk_flush_complete_seq(struct request *rq,
 		if (list_empty(pending))
 			fq->flush_pending_since = jiffies;
 		list_move_tail(&rq->flush.list, pending);
+#ifdef CONFIG_BLK_ENHANCEMENT
+		trigger_rq_flush_start(rq);
+#endif
 		break;
 
 	case REQ_FSEQ_DATA:
@@ -266,6 +269,9 @@ static void flush_end_io(struct request *flush_rq, blk_status_t error)
 		unsigned int seq = blk_flush_cur_seq(rq);
 
 		BUG_ON(seq != REQ_FSEQ_PREFLUSH && seq != REQ_FSEQ_POSTFLUSH);
+#ifdef CONFIG_BLK_ENHANCEMENT
+		trigger_rq_flush_end(rq);
+#endif
 		queued |= blk_flush_complete_seq(rq, fq, seq, error);
 	}
 
@@ -455,6 +461,10 @@ void blk_insert_flush(struct request *rq)
 
 	if (!q->mq_ops)
 		lockdep_assert_held(q->queue_lock);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	else
+		trigger_rq_insert(rq);
+#endif
 
 	/*
 	 * @policy now records what operations need to be done.  Adjust

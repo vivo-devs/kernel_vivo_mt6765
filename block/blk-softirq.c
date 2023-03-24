@@ -14,6 +14,9 @@
 
 #include "blk.h"
 
+#define BLK_SOFTIRQ_TUNING		1
+#define BLK_SOFTIRQ_PENDING		2
+
 static DEFINE_PER_CPU(struct list_head, blk_cpu_done);
 
 /*
@@ -23,8 +26,14 @@ static DEFINE_PER_CPU(struct list_head, blk_cpu_done);
 static __latent_entropy void blk_done_softirq(struct softirq_action *h)
 {
 	struct list_head *cpu_list, local_list;
+#ifdef CONFIG_BLK_ENHANCEMENT
+	int cpu;
+#endif
 
 	local_irq_disable();
+#ifdef CONFIG_BLK_ENHANCEMENT
+	cpu = smp_processor_id();
+#endif
 	cpu_list = this_cpu_ptr(&blk_cpu_done);
 	list_replace_init(cpu_list, &local_list);
 	local_irq_enable();
@@ -34,6 +43,12 @@ static __latent_entropy void blk_done_softirq(struct softirq_action *h)
 
 		rq = list_entry(local_list.next, struct request, ipi_list);
 		list_del_init(&rq->ipi_list);
+#ifdef CONFIG_BLK_ENHANCEMENT
+		if (rq->q->mq_ops)
+			trigger_rq_softirq_out(rq, rq->mq_ctx->cpu, cpu);
+		else
+			trigger_rq_softirq_out(rq, rq->cpu, cpu);
+#endif
 		rq->q->softirq_done_fn(rq);
 	}
 }
@@ -104,6 +119,10 @@ void __blk_complete_request(struct request *req)
 
 	BUG_ON(!q->softirq_done_fn);
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_rq_softirq_in(req);
+#endif
+
 	local_irq_save(flags);
 	cpu = smp_processor_id();
 
@@ -127,8 +146,30 @@ void __blk_complete_request(struct request *req)
 	 */
 	if (ccpu == cpu || shared) {
 		struct list_head *list;
+#if BLK_SOFTIRQ_TUNING
+		struct list_head *pos;
+		int count = 0;
+#endif
 do_local:
 		list = this_cpu_ptr(&blk_cpu_done);
+
+#if BLK_SOFTIRQ_TUNING
+		/* modify by yangyang */
+		if (ccpu != cpu) {
+			list_for_each(pos, list) {
+				count++;
+				if (count >= BLK_SOFTIRQ_PENDING) {
+					if (raise_blk_irq(ccpu, req)) {
+						break;
+					} else {
+						local_irq_restore(flags);
+						return;
+					}
+				}
+			}
+		}
+#endif
+
 		list_add_tail(&req->ipi_list, list);
 
 		/*

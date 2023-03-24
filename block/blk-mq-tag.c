@@ -86,6 +86,9 @@ static inline bool hctx_may_queue(struct blk_mq_hw_ctx *hctx,
 	if (!users)
 		return true;
 
+	if (users > 1 && blk_queue_scsi_passthrough(hctx->queue))
+		return true;
+
 	/*
 	 * Allow at least some tags
 	 */

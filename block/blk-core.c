@@ -37,6 +37,7 @@
 #include <linux/bpf.h>
 #include <linux/psi.h>
 #include <linux/blk-crypto.h>
+#include <mt-plat/mtk_blocktag.h> /* MTK PATCH */
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
@@ -45,6 +46,7 @@
 #include "blk-mq.h"
 #include "blk-mq-sched.h"
 #include "blk-rq-qos.h"
+#include "mtk_mmc_block.h"
 
 #ifdef CONFIG_DEBUG_FS
 struct dentry *blk_debugfs_root;
@@ -201,6 +203,19 @@ void blk_rq_init(struct request_queue *q, struct request *rq)
 	rq->start_time_ns = ktime_get_ns();
 	rq->part = NULL;
 	refcount_set(&rq->ref, 1);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	rq->info.rq_get_time = 0;
+	rq->info.rq_insert_time = 0;
+	rq->info.rq_dequeue_time = 0;
+	rq->info.rq_requeue_time = 0;
+	rq->info.rq_issue_time = 0;
+	rq->info.rq_softin_time = 0;
+	rq->info.rq_softout_time = 0;
+	rq->info.rq_qcmd_time = 0;
+	rq->info.rq_compl_time = 0;
+	rq->info.rq_abort_time = 0;
+	rq->info.requeue_count = 0;
+#endif
 }
 EXPORT_SYMBOL(blk_rq_init);
 
@@ -413,7 +428,7 @@ void blk_sync_queue(struct request_queue *q)
 	if (q->mq_ops) {
 		struct blk_mq_hw_ctx *hctx;
 		int i;
-
+		mt_bio_queue_free(current);
 		queue_for_each_hw_ctx(q, hctx, i)
 			cancel_delayed_work_sync(&hctx->run_work);
 	} else {
@@ -1280,11 +1295,12 @@ static void __freed_request(struct request_list *rl, int sync)
  * congestion status, wake up any waiters.   Called under q->queue_lock.
  */
 static void freed_request(struct request_list *rl, bool sync,
-		req_flags_t rq_flags)
+		req_flags_t rq_flags, unsigned int op)
 {
 	struct request_queue *q = rl->q;
 
 	q->nr_rqs[sync]--;
+	q->rw_rqs[op_is_write(op)]--;
 	rl->count[sync]--;
 	if (rq_flags & RQF_ELVPRIV)
 		q->nr_rqs_elvpriv--;
@@ -1338,6 +1354,11 @@ int blk_update_nr_requests(struct request_queue *q, unsigned int nr)
 	return 0;
 }
 
+#ifdef CONFIG_RSC_VAUDIT
+#include <linux/vivo_rsc/rsc_internal.h>
+#include <linux/cpuset.h>
+#endif
+
 /**
  * __get_request - get a free request
  * @rl: request list to allocate from
@@ -1374,6 +1395,56 @@ static struct request *__get_request(struct request_list *rl, unsigned int op,
 	if (may_queue == ELV_MQUEUE_NO)
 		goto rq_starved;
 
+	if (blk_op_is_scsi(op))
+		goto rq_alloc;
+
+	if (rl->count[is_sync]) {
+		do {
+			int _rqs[3] = {12, 24, 28};
+
+			if (!bio)
+				break;
+
+			if (!op_is_write(op))
+				break;
+
+			if (q->queue_depth) {
+				_rqs[0] = q->queue_depth * 3 / 8;
+				_rqs[1] = q->queue_depth * 6 / 8;
+				_rqs[2] = q->queue_depth * 7 / 8;
+			}
+
+			if (!is_sync) {
+				if (q->nr_rqs[BLK_RW_ASYNC]+1 > _rqs[0] ||
+						q->rw_rqs[WRITE]+1 > _rqs[1])
+					return ERR_PTR(-ENOMEM);
+				else
+					break;
+			}
+
+			if (q->rw_rqs[WRITE]+1 <= _rqs[1])
+				break;
+
+#ifdef CONFIG_RSC_VAUDIT
+			if (rsc_get_task_group(current) != RSC_GROUP_FG)
+				return ERR_PTR(-ENOMEM);
+#endif
+
+			if ((bio->bi_opf & (REQ_SYNC | REQ_IDLE)) == (REQ_SYNC | REQ_IDLE)) {
+				if (q->rw_rqs[WRITE]+1 <= 28)
+					break;
+			}
+
+#ifdef CONFIG_RSC_VAUDIT
+			if ((current->mainthread & RSC_NEED_VAUDIT_MAINTHREAD)) {
+				if (q->rw_rqs[WRITE]+1 <= _rqs[2])
+					break;
+			}
+#endif
+			return ERR_PTR(-ENOMEM);
+		} while (0);
+	}
+
 	if (rl->count[is_sync]+1 >= queue_congestion_on_threshold(q)) {
 		if (rl->count[is_sync]+1 >= q->nr_requests) {
 			/*
@@ -1405,10 +1476,15 @@ static struct request *__get_request(struct request_list *rl, unsigned int op,
 	 * limit of requests, otherwise we could have thousands of requests
 	 * allocated with any setting of ->nr_requests
 	 */
+	if (rl->count[is_sync] >= (6 * q->nr_requests / 5))
+		return ERR_PTR(-ENOMEM);
+
+rq_alloc:
 	if (rl->count[is_sync] >= (3 * q->nr_requests / 2))
 		return ERR_PTR(-ENOMEM);
 
 	q->nr_rqs[is_sync]++;
+	q->rw_rqs[op_is_write(op)]++;
 	rl->count[is_sync]++;
 	rl->starved[is_sync] = 0;
 
@@ -1505,7 +1581,7 @@ fail_alloc:
 	 * queue, but this is pretty rare.
 	 */
 	spin_lock_irq(q->queue_lock);
-	freed_request(rl, is_sync, rq_flags);
+	freed_request(rl, is_sync, rq_flags, op);
 
 	/*
 	 * in the very unlikely event that allocation failed and no
@@ -1661,6 +1737,9 @@ void blk_requeue_request(struct request_queue *q, struct request *rq)
 	blk_delete_timer(rq);
 	blk_clear_rq_complete(rq);
 	trace_block_rq_requeue(q, rq);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_rq_requeue(rq);
+#endif
 	rq_qos_requeue(q, rq);
 
 	if (rq->rq_flags & RQF_QUEUED)
@@ -1777,12 +1856,13 @@ void __blk_put_request(struct request_queue *q, struct request *req)
 	if (rq_flags & RQF_ALLOCED) {
 		struct request_list *rl = blk_rq_rl(req);
 		bool sync = op_is_sync(req->cmd_flags);
+		unsigned int op = req->cmd_flags;
 
 		BUG_ON(!list_empty(&req->queuelist));
 		BUG_ON(ELV_ON_HASH(req));
 
 		blk_free_request(rl, req);
-		freed_request(rl, sync, rq_flags);
+		freed_request(rl, sync, rq_flags, op);
 		blk_put_rl(rl);
 		blk_queue_exit(q);
 	}
@@ -1814,6 +1894,9 @@ bool bio_attempt_back_merge(struct request_queue *q, struct request *req,
 		return false;
 
 	trace_block_bio_backmerge(q, req, bio);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_bio_merge(bio, req);
+#endif
 
 	if ((req->cmd_flags & REQ_FAILFAST_MASK) != ff)
 		blk_rq_set_mixed_merge(req);
@@ -1836,6 +1919,9 @@ bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
 		return false;
 
 	trace_block_bio_frontmerge(q, req, bio);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_bio_merge(bio, req);
+#endif
 
 	if ((req->cmd_flags & REQ_FAILFAST_MASK) != ff)
 		blk_rq_set_mixed_merge(req);
@@ -1862,6 +1948,9 @@ bool bio_attempt_discard_merge(struct request_queue *q, struct request *req,
 	    blk_rq_get_max_sectors(req, blk_rq_pos(req)))
 		goto no_merge;
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_bio_merge(bio, req);
+#endif
 	req->biotail->bi_next = bio;
 	req->biotail = bio;
 	req->__data_len += bio->bi_iter.bi_size;
@@ -2059,7 +2148,13 @@ static blk_qc_t blk_queue_bio(struct request_queue *q, struct bio *bio)
 	}
 
 get_rq:
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_bio_wbtin(bio);
+#endif
 	rq_qos_throttle(q, bio, q->queue_lock);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_bio_wbtout(bio, q);
+#endif
 
 	/*
 	 * Grab a free request. This is might sleep but can not fail.
@@ -2087,6 +2182,10 @@ get_rq:
 	 * often, and the elevators are able to handle it.
 	 */
 	blk_init_request_from_bio(req, bio);
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_getrq(req, bio);
+#endif
 
 	if (test_bit(QUEUE_FLAG_SAME_COMP, &q->queue_flags))
 		req->cpu = raw_smp_processor_id();
@@ -2342,7 +2441,20 @@ generic_make_request_checks(struct bio *bio)
 		return false;
 
 	if (!bio_flagged(bio, BIO_TRACE_COMPLETION)) {
+#ifdef CONFIG_BLK_ENHANCEMENT
+		struct blkcg *blkcg;
+		int prio = 0;
+
+		rcu_read_lock();
+		blkcg = bio_blkcg(bio);
+		prio = blkcg ? blkcg->priority : 0;
+		rcu_read_unlock();
+
+		trace_block_bio_queue(q, bio, prio);
+		trigger_bio_queue(bio, prio);
+#else
 		trace_block_bio_queue(q, bio);
+#endif
 		/* Now that enqueuing has been traced, we need to trace
 		 * completion as well.
 		 */
@@ -2571,6 +2683,9 @@ blk_qc_t submit_bio(struct bio *bio)
 			count_vm_events(PGPGIN, count);
 		}
 
+#ifdef CONFIG_MTK_BLOCK_TAG
+		mtk_btag_pidlog_submit_bio(bio);
+#endif
 		if (unlikely(block_dump)) {
 			char b[BDEVNAME_SIZE];
 			printk(KERN_DEBUG "%s(%d): %s block %Lu on %s (%u sectors)\n",
@@ -2922,6 +3037,9 @@ struct request *blk_peek_request(struct request_queue *q)
 			 */
 			rq->rq_flags |= RQF_STARTED;
 			trace_block_rq_issue(q, rq);
+#ifdef CONFIG_BLK_ENHANCEMENT
+			trigger_rq_issue(rq);
+#endif
 		}
 
 		if (!q->boundary_rq || q->boundary_rq == rq) {
@@ -2999,8 +3117,10 @@ static void blk_dequeue_request(struct request *rq)
 	 * and to it is freed is accounted as io that is in progress at
 	 * the driver side.
 	 */
-	if (blk_account_rq(rq))
+	if (blk_account_rq(rq)) {
 		q->in_flight[rq_is_sync(rq)]++;
+		q->rw_inflight[op_is_write(req_op(rq))]++;
+	}
 }
 
 /**

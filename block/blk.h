@@ -6,6 +6,10 @@
 #include <linux/blk-mq.h>
 #include "blk-mq.h"
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+#include <linux/blk-enhancement.h>
+#endif
+
 /* Amount of time in which a process may batch requests */
 #define BLK_BATCH_TIME	(HZ/50UL)
 

@@ -29,47 +29,121 @@
 #include "blk-mq-debugfs.h"
 #include "blk-mq-sched.h"
 #include "blk-mq-tag.h"
-#include "blk-stat.h"
 
-/* Scheduling domains. */
+#define CREATE_TRACE_POINTS
+#include <trace/events/kyber.h>
+
+/*
+ * Scheduling domains: the device is divided into multiple domains based on the
+ * request type.
+ */
 enum {
 	KYBER_READ,
-	KYBER_SYNC_WRITE,
-	KYBER_OTHER, /* Async writes, discard, etc. */
+	KYBER_WRITE,
+	KYBER_DISCARD,
+	KYBER_OTHER,
 	KYBER_NUM_DOMAINS,
 };
 
-enum {
-	KYBER_MIN_DEPTH = 256,
+static const char *kyber_domain_names[] = {
+	[KYBER_READ] = "READ",
+	[KYBER_WRITE] = "WRITE",
+	[KYBER_DISCARD] = "DISCARD",
+	[KYBER_OTHER] = "OTHER",
+};
 
+enum {
 	/*
 	 * In order to prevent starvation of synchronous requests by a flood of
 	 * asynchronous requests, we reserve 25% of requests for synchronous
 	 * operations.
 	 */
-	KYBER_ASYNC_PERCENT = 75,
+	KYBER_WRITE_PERCENT = 65,
+	KYBER_ASYNC_PERCENT = 50,
 };
 
 /*
- * Initial device-wide depths for each scheduling domain.
+ * Maximum device-wide depth for each scheduling domain.
  *
- * Even for fast devices with lots of tags like NVMe, you can saturate
- * the device with only a fraction of the maximum possible queue depth.
- * So, we cap these to a reasonable value.
+ * Even for fast devices with lots of tags like NVMe, you can saturate the
+ * device with only a fraction of the maximum possible queue depth. So, we cap
+ * these to a reasonable value.
  */
 static const unsigned int kyber_depth[] = {
-	[KYBER_READ] = 256,
-	[KYBER_SYNC_WRITE] = 128,
-	[KYBER_OTHER] = 64,
+	[KYBER_READ] = 48,
+	[KYBER_WRITE] = 24,
+	[KYBER_DISCARD] = 16,
+	[KYBER_OTHER] = 12,
 };
 
 /*
- * Scheduling domain batch sizes. We favor reads.
+ * Default latency targets for each scheduling domain.
+ */
+static const u64 kyber_latency_targets[] = {
+	[KYBER_READ] = 2ULL * NSEC_PER_MSEC,
+	[KYBER_WRITE] = 10ULL * NSEC_PER_MSEC,
+	[KYBER_DISCARD] = 5ULL * NSEC_PER_SEC,
+};
+
+/*
+ * Batch size (number of requests we'll dispatch in a row) for each scheduling
+ * domain.
  */
 static const unsigned int kyber_batch_size[] = {
 	[KYBER_READ] = 16,
-	[KYBER_SYNC_WRITE] = 8,
-	[KYBER_OTHER] = 8,
+	[KYBER_WRITE] = 8,
+	[KYBER_DISCARD] = 1,
+	[KYBER_OTHER] = 1,
+};
+
+/*
+ * Requests latencies are recorded in a histogram with buckets defined relative
+ * to the target latency:
+ *
+ * <= 1/4 * target latency
+ * <= 1/2 * target latency
+ * <= 3/4 * target latency
+ * <= target latency
+ * <= 1 1/4 * target latency
+ * <= 1 1/2 * target latency
+ * <= 1 3/4 * target latency
+ * > 1 3/4 * target latency
+ */
+enum {
+	/*
+	 * The width of the latency histogram buckets is
+	 * 1 / (1 << KYBER_LATENCY_SHIFT) * target latency.
+	 */
+	KYBER_LATENCY_SHIFT = 2,
+	/*
+	 * The first (1 << KYBER_LATENCY_SHIFT) buckets are <= target latency,
+	 * thus, "good".
+	 */
+	KYBER_GOOD_BUCKETS = 1 << KYBER_LATENCY_SHIFT,
+	/* There are also (1 << KYBER_LATENCY_SHIFT) "bad" buckets. */
+	KYBER_LATENCY_BUCKETS = 2 << KYBER_LATENCY_SHIFT,
+};
+
+/*
+ * We measure both the total latency and the I/O latency (i.e., latency after
+ * submitting to the device).
+ */
+enum {
+	KYBER_TOTAL_LATENCY,
+	KYBER_IO_LATENCY,
+};
+
+static const char *kyber_latency_type_names[] = {
+	[KYBER_TOTAL_LATENCY] = "total",
+	[KYBER_IO_LATENCY] = "I/O",
+};
+
+/*
+ * Per-cpu latency histograms: total latency and I/O latency for each scheduling
+ * domain except for KYBER_OTHER.
+ */
+struct kyber_cpu_latency {
+	atomic_t buckets[KYBER_OTHER][2][KYBER_LATENCY_BUCKETS];
 };
 
 /*
@@ -88,23 +162,36 @@ struct kyber_ctx_queue {
 struct kyber_queue_data {
 	struct request_queue *q;
 
-	struct blk_stat_callback *cb;
-
 	/*
-	 * The device is divided into multiple scheduling domains based on the
-	 * request type. Each domain has a fixed number of in-flight requests of
-	 * that type device-wide, limited by these tokens.
+	 * Each scheduling domain has a limited number of in-flight requests
+	 * device-wide, limited by these tokens.
 	 */
 	struct sbitmap_queue domain_tokens[KYBER_NUM_DOMAINS];
+
+	unsigned int kyber_depth[KYBER_NUM_DOMAINS];
+
+	unsigned int kyber_min_depth[KYBER_NUM_DOMAINS];
 
 	/*
 	 * Async request percentage, converted to per-word depth for
 	 * sbitmap_get_shallow().
 	 */
+	unsigned int write_depth;
 	unsigned int async_depth;
 
+	struct kyber_cpu_latency __percpu *cpu_latency;
+
+	/* Timer for stats aggregation and adjusting domain tokens. */
+	struct timer_list timer;
+
+	unsigned int latency_buckets[KYBER_OTHER][2][KYBER_LATENCY_BUCKETS];
+
+	unsigned long latency_timeout[KYBER_OTHER];
+
+	int domain_p99[KYBER_OTHER];
+
 	/* Target latencies in nanoseconds. */
-	u64 read_lat_nsec, write_lat_nsec;
+	u64 latency_targets[KYBER_OTHER];
 };
 
 struct kyber_hctx_data {
@@ -124,233 +211,238 @@ static int kyber_domain_wake(wait_queue_entry_t *wait, unsigned mode, int flags,
 
 static unsigned int kyber_sched_domain(unsigned int op)
 {
-	if ((op & REQ_OP_MASK) == REQ_OP_READ)
+	switch (op & REQ_OP_MASK) {
+	case REQ_OP_READ:
 		return KYBER_READ;
-	else if ((op & REQ_OP_MASK) == REQ_OP_WRITE && op_is_sync(op))
-		return KYBER_SYNC_WRITE;
-	else
+	case REQ_OP_WRITE:
+		return KYBER_WRITE;
+	case REQ_OP_DISCARD:
+		return KYBER_DISCARD;
+	default:
 		return KYBER_OTHER;
+	}
 }
 
-enum {
-	NONE = 0,
-	GOOD = 1,
-	GREAT = 2,
-	BAD = -1,
-	AWFUL = -2,
-};
-
-#define IS_GOOD(status) ((status) > 0)
-#define IS_BAD(status) ((status) < 0)
-
-static int kyber_lat_status(struct blk_stat_callback *cb,
-			    unsigned int sched_domain, u64 target)
+static void flush_latency_buckets(struct kyber_queue_data *kqd,
+				  struct kyber_cpu_latency *cpu_latency,
+				  unsigned int sched_domain, unsigned int type)
 {
-	u64 latency;
+	unsigned int *buckets = kqd->latency_buckets[sched_domain][type];
+	atomic_t *cpu_buckets = cpu_latency->buckets[sched_domain][type];
+	unsigned int bucket;
 
-	if (!cb->stat[sched_domain].nr_samples)
-		return NONE;
-
-	latency = cb->stat[sched_domain].mean;
-	if (latency >= 2 * target)
-		return AWFUL;
-	else if (latency > target)
-		return BAD;
-	else if (latency <= target / 2)
-		return GREAT;
-	else /* (latency <= target) */
-		return GOOD;
+	for (bucket = 0; bucket < KYBER_LATENCY_BUCKETS; bucket++)
+		buckets[bucket] += atomic_xchg(&cpu_buckets[bucket], 0);
 }
 
 /*
- * Adjust the read or synchronous write depth given the status of reads and
- * writes. The goal is that the latencies of the two domains are fair (i.e., if
- * one is good, then the other is good).
+ * Calculate the histogram bucket with the given percentile rank, or -1 if there
+ * aren't enough samples yet.
  */
-static void kyber_adjust_rw_depth(struct kyber_queue_data *kqd,
-				  unsigned int sched_domain, int this_status,
-				  int other_status)
+static int calculate_percentile(struct kyber_queue_data *kqd,
+				unsigned int sched_domain, unsigned int type,
+				unsigned int percentile)
 {
-	unsigned int orig_depth, depth;
+	unsigned int *buckets = kqd->latency_buckets[sched_domain][type];
+	unsigned int bucket, samples = 0, percentile_samples;
+
+	for (bucket = 0; bucket < KYBER_LATENCY_BUCKETS; bucket++)
+		samples += buckets[bucket];
+
+	if (!samples)
+		return -1;
 
 	/*
-	 * If this domain had no samples, or reads and writes are both good or
-	 * both bad, don't adjust the depth.
+	 * We do the calculation once we have 500 samples or one second passes
+	 * since the first sample was recorded, whichever comes first.
 	 */
-	if (this_status == NONE ||
-	    (IS_GOOD(this_status) && IS_GOOD(other_status)) ||
-	    (IS_BAD(this_status) && IS_BAD(other_status)))
-		return;
-
-	orig_depth = depth = kqd->domain_tokens[sched_domain].sb.depth;
-
-	if (other_status == NONE) {
-		depth++;
-	} else {
-		switch (this_status) {
-		case GOOD:
-			if (other_status == AWFUL)
-				depth -= max(depth / 4, 1U);
-			else
-				depth -= max(depth / 8, 1U);
-			break;
-		case GREAT:
-			if (other_status == AWFUL)
-				depth /= 2;
-			else
-				depth -= max(depth / 4, 1U);
-			break;
-		case BAD:
-			depth++;
-			break;
-		case AWFUL:
-			if (other_status == GREAT)
-				depth += 2;
-			else
-				depth++;
-			break;
-		}
+	if (!kqd->latency_timeout[sched_domain])
+		kqd->latency_timeout[sched_domain] = max(jiffies + HZ, 1UL);
+	if (samples < 500 &&
+	    time_is_after_jiffies(kqd->latency_timeout[sched_domain])) {
+		return -1;
 	}
+	kqd->latency_timeout[sched_domain] = 0;
 
-	depth = clamp(depth, 1U, kyber_depth[sched_domain]);
-	if (depth != orig_depth)
+	percentile_samples = DIV_ROUND_UP(samples * percentile, 100);
+	for (bucket = 0; bucket < KYBER_LATENCY_BUCKETS - 1; bucket++) {
+		if (buckets[bucket] >= percentile_samples)
+			break;
+		percentile_samples -= buckets[bucket];
+	}
+	memset(buckets, 0, sizeof(kqd->latency_buckets[sched_domain][type]));
+
+	trace_kyber_latency(kqd->q, kyber_domain_names[sched_domain],
+			    kyber_latency_type_names[type], percentile,
+			    bucket + 1, 1 << KYBER_LATENCY_SHIFT, samples);
+
+	return bucket;
+}
+
+static void kyber_resize_domain(struct kyber_queue_data *kqd,
+				unsigned int sched_domain, unsigned int depth)
+{
+	depth = clamp(depth, kqd->kyber_min_depth[sched_domain],
+			kqd->kyber_depth[sched_domain]);
+	if (depth != kqd->domain_tokens[sched_domain].sb.depth) {
 		sbitmap_queue_resize(&kqd->domain_tokens[sched_domain], depth);
+		trace_kyber_adjust(kqd->q, kyber_domain_names[sched_domain],
+				   depth);
+	}
 }
 
-/*
- * Adjust the depth of other requests given the status of reads and synchronous
- * writes. As long as either domain is doing fine, we don't throttle, but if
- * both domains are doing badly, we throttle heavily.
- */
-static void kyber_adjust_other_depth(struct kyber_queue_data *kqd,
-				     int read_status, int write_status,
-				     bool have_samples)
+static void kyber_timer_fn(struct timer_list *t)
 {
-	unsigned int orig_depth, depth;
-	int status;
+	struct kyber_queue_data *kqd = from_timer(kqd, t, timer);
+	unsigned int sched_domain;
+	int cpu;
+	bool bad = false;
 
-	orig_depth = depth = kqd->domain_tokens[KYBER_OTHER].sb.depth;
+	/* Sum all of the per-cpu latency histograms. */
+	for_each_online_cpu(cpu) {
+		struct kyber_cpu_latency *cpu_latency;
 
-	if (read_status == NONE && write_status == NONE) {
-		depth += 2;
-	} else if (have_samples) {
-		if (read_status == NONE)
-			status = write_status;
-		else if (write_status == NONE)
-			status = read_status;
-		else
-			status = max(read_status, write_status);
-		switch (status) {
-		case GREAT:
-			depth += 2;
-			break;
-		case GOOD:
-			depth++;
-			break;
-		case BAD:
-			depth -= max(depth / 4, 1U);
-			break;
-		case AWFUL:
-			depth /= 2;
-			break;
+		cpu_latency = per_cpu_ptr(kqd->cpu_latency, cpu);
+		for (sched_domain = 0; sched_domain < KYBER_OTHER; sched_domain++) {
+			flush_latency_buckets(kqd, cpu_latency, sched_domain,
+					      KYBER_TOTAL_LATENCY);
+			flush_latency_buckets(kqd, cpu_latency, sched_domain,
+					      KYBER_IO_LATENCY);
 		}
 	}
 
-	depth = clamp(depth, 1U, kyber_depth[KYBER_OTHER]);
-	if (depth != orig_depth)
-		sbitmap_queue_resize(&kqd->domain_tokens[KYBER_OTHER], depth);
-}
+	/*
+	 * Check if any domains have a high I/O latency, which might indicate
+	 * congestion in the device. Note that we use the p90; we don't want to
+	 * be too sensitive to outliers here.
+	 */
+	for (sched_domain = 0; sched_domain < KYBER_OTHER; sched_domain++) {
+		int p90;
 
-/*
- * Apply heuristics for limiting queue depths based on gathered latency
- * statistics.
- */
-static void kyber_stat_timer_fn(struct blk_stat_callback *cb)
-{
-	struct kyber_queue_data *kqd = cb->data;
-	int read_status, write_status;
-
-	read_status = kyber_lat_status(cb, KYBER_READ, kqd->read_lat_nsec);
-	write_status = kyber_lat_status(cb, KYBER_SYNC_WRITE, kqd->write_lat_nsec);
-
-	kyber_adjust_rw_depth(kqd, KYBER_READ, read_status, write_status);
-	kyber_adjust_rw_depth(kqd, KYBER_SYNC_WRITE, write_status, read_status);
-	kyber_adjust_other_depth(kqd, read_status, write_status,
-				 cb->stat[KYBER_OTHER].nr_samples != 0);
+		p90 = calculate_percentile(kqd, sched_domain, KYBER_IO_LATENCY,
+					   90);
+		if (p90 >= KYBER_GOOD_BUCKETS)
+			bad = true;
+	}
 
 	/*
-	 * Continue monitoring latencies if we aren't hitting the targets or
-	 * we're still throttling other requests.
+	 * Adjust the scheduling domain depths. If we determined that there was
+	 * congestion, we throttle all domains with good latencies. Either way,
+	 * we ease up on throttling domains with bad latencies.
 	 */
-	if (!blk_stat_is_active(kqd->cb) &&
-	    ((IS_BAD(read_status) || IS_BAD(write_status) ||
-	      kqd->domain_tokens[KYBER_OTHER].sb.depth < kyber_depth[KYBER_OTHER])))
-		blk_stat_activate_msecs(kqd->cb, 100);
-}
+	for (sched_domain = 0; sched_domain < KYBER_OTHER; sched_domain++) {
+		unsigned int orig_depth, depth;
+		int p99;
 
-static unsigned int kyber_sched_tags_shift(struct kyber_queue_data *kqd)
-{
-	/*
-	 * All of the hardware queues have the same depth, so we can just grab
-	 * the shift of the first one.
-	 */
-	return kqd->q->queue_hw_ctx[0]->sched_tags->bitmap_tags.sb.shift;
-}
+		p99 = calculate_percentile(kqd, sched_domain,
+					   KYBER_TOTAL_LATENCY, 99);
+		/*
+		 * This is kind of subtle: different domains will not
+		 * necessarily have enough samples to calculate the latency
+		 * percentiles during the same window, so we have to remember
+		 * the p99 for the next time we observe congestion; once we do,
+		 * we don't want to throttle again until we get more data, so we
+		 * reset it to -1.
+		 */
+		if (bad) {
+			if (p99 < 0)
+				p99 = kqd->domain_p99[sched_domain];
+			kqd->domain_p99[sched_domain] = -1;
+		} else if (p99 >= 0) {
+			kqd->domain_p99[sched_domain] = p99;
+		}
+		if (p99 < 0)
+			continue;
 
-static int kyber_bucket_fn(const struct request *rq)
-{
-	return kyber_sched_domain(rq->cmd_flags);
+		/*
+		 * If this domain has bad latency, throttle less. Otherwise,
+		 * throttle more iff we determined that there is congestion.
+		 *
+		 * The new depth is scaled linearly with the p99 latency vs the
+		 * latency target. E.g., if the p99 is 3/4 of the target, then
+		 * we throttle down to 3/4 of the current depth, and if the p99
+		 * is 2x the target, then we double the depth.
+		 */
+		if (bad || p99 >= KYBER_GOOD_BUCKETS) {
+			orig_depth = kqd->domain_tokens[sched_domain].sb.depth;
+			depth = (orig_depth * (p99 + 1)) >> KYBER_LATENCY_SHIFT;
+			kyber_resize_domain(kqd, sched_domain, depth);
+		}
+	}
 }
 
 static struct kyber_queue_data *kyber_queue_data_alloc(struct request_queue *q)
 {
 	struct kyber_queue_data *kqd;
-	unsigned int max_tokens;
-	unsigned int shift;
+	int depth = q->tag_set->queue_depth;
 	int ret = -ENOMEM;
 	int i;
 
-	kqd = kmalloc_node(sizeof(*kqd), GFP_KERNEL, q->node);
+	kqd = kzalloc_node(sizeof(*kqd), GFP_KERNEL, q->node);
 	if (!kqd)
 		goto err;
+
 	kqd->q = q;
 
-	kqd->cb = blk_stat_alloc_callback(kyber_stat_timer_fn, kyber_bucket_fn,
-					  KYBER_NUM_DOMAINS, kqd);
-	if (!kqd->cb)
+	kqd->cpu_latency = alloc_percpu_gfp(struct kyber_cpu_latency,
+					    GFP_KERNEL | __GFP_ZERO);
+	if (!kqd->cpu_latency)
 		goto err_kqd;
 
-	/*
-	 * The maximum number of tokens for any scheduling domain is at least
-	 * the queue depth of a single hardware queue. If the hardware doesn't
-	 * have many tags, still provide a reasonable number.
-	 */
-	max_tokens = max_t(unsigned int, q->tag_set->queue_depth,
-			   KYBER_MIN_DEPTH);
+	timer_setup(&kqd->timer, kyber_timer_fn, 0);
+
+	if (depth >= 16 && depth <= 32) {
+		kqd->kyber_depth[KYBER_READ] = depth * 6 / 4;
+		kqd->kyber_depth[KYBER_WRITE] = depth * 3 / 4;
+		kqd->kyber_depth[KYBER_DISCARD] = depth / 4;
+		kqd->kyber_depth[KYBER_OTHER] = depth / 4;
+
+		kqd->kyber_min_depth[KYBER_READ] = 8;
+		kqd->kyber_min_depth[KYBER_WRITE] = 8;
+		kqd->kyber_min_depth[KYBER_DISCARD] = 1;
+		kqd->kyber_min_depth[KYBER_OTHER] = 1;
+	} else {
+		for (i = 0; i < KYBER_NUM_DOMAINS; i++) {
+			kqd->kyber_depth[i] = kyber_depth[i];
+			kqd->kyber_min_depth[i] = 1;
+		}
+	}
+
+	pr_info("iosched: {%d %d %d %d} {%d %d %d %d}\n",
+			kqd->kyber_depth[KYBER_READ],
+			kqd->kyber_depth[KYBER_WRITE],
+			kqd->kyber_depth[KYBER_DISCARD],
+			kqd->kyber_depth[KYBER_OTHER],
+			kqd->kyber_min_depth[KYBER_READ],
+			kqd->kyber_min_depth[KYBER_WRITE],
+			kqd->kyber_min_depth[KYBER_DISCARD],
+			kqd->kyber_min_depth[KYBER_OTHER]);
+
 	for (i = 0; i < KYBER_NUM_DOMAINS; i++) {
 		WARN_ON(!kyber_depth[i]);
+		BUG_ON(!kqd->kyber_depth[i]);
+		BUG_ON(!kqd->kyber_min_depth[i]);
+		BUG_ON(kqd->kyber_depth[i] < kqd->kyber_min_depth[i]);
 		WARN_ON(!kyber_batch_size[i]);
 		ret = sbitmap_queue_init_node(&kqd->domain_tokens[i],
-					      max_tokens, -1, false, GFP_KERNEL,
-					      q->node);
+					      kqd->kyber_depth[i], -1, false,
+					      GFP_KERNEL, q->node);
 		if (ret) {
 			while (--i >= 0)
 				sbitmap_queue_free(&kqd->domain_tokens[i]);
-			goto err_cb;
+			goto err_buckets;
 		}
-		sbitmap_queue_resize(&kqd->domain_tokens[i], kyber_depth[i]);
 	}
 
-	shift = kyber_sched_tags_shift(kqd);
-	kqd->async_depth = (1U << shift) * KYBER_ASYNC_PERCENT / 100U;
-
-	kqd->read_lat_nsec = 2000000ULL;
-	kqd->write_lat_nsec = 10000000ULL;
+	for (i = 0; i < KYBER_OTHER; i++) {
+		kqd->domain_p99[i] = -1;
+		kqd->latency_targets[i] = kyber_latency_targets[i];
+	}
 
 	return kqd;
 
-err_cb:
-	blk_stat_free_callback(kqd->cb);
+err_buckets:
+	free_percpu(kqd->cpu_latency);
 err_kqd:
 	kfree(kqd);
 err:
@@ -372,10 +464,10 @@ static int kyber_init_sched(struct request_queue *q, struct elevator_type *e)
 		return PTR_ERR(kqd);
 	}
 
+	blk_stat_enable_accounting(q);
+
 	eq->elevator_data = kqd;
 	q->elevator = eq;
-
-	blk_stat_add_callback(q, kqd->cb);
 
 	return 0;
 }
@@ -383,14 +475,13 @@ static int kyber_init_sched(struct request_queue *q, struct elevator_type *e)
 static void kyber_exit_sched(struct elevator_queue *e)
 {
 	struct kyber_queue_data *kqd = e->elevator_data;
-	struct request_queue *q = kqd->q;
 	int i;
 
-	blk_stat_remove_callback(q, kqd->cb);
+	del_timer_sync(&kqd->timer);
 
 	for (i = 0; i < KYBER_NUM_DOMAINS; i++)
 		sbitmap_queue_free(&kqd->domain_tokens[i]);
-	blk_stat_free_callback(kqd->cb);
+	free_percpu(kqd->cpu_latency);
 	kfree(kqd);
 }
 
@@ -403,9 +494,20 @@ static void kyber_ctx_queue_init(struct kyber_ctx_queue *kcq)
 		INIT_LIST_HEAD(&kcq->rq_list[i]);
 }
 
-static int kyber_init_hctx(struct blk_mq_hw_ctx *hctx, unsigned int hctx_idx)
+static void kyber_depth_updated(struct blk_mq_hw_ctx *hctx)
 {
 	struct kyber_queue_data *kqd = hctx->queue->elevator->elevator_data;
+	struct blk_mq_tags *tags = hctx->sched_tags;
+	unsigned int shift = tags->bitmap_tags.sb.shift;
+
+	kqd->write_depth = (1U << shift) * KYBER_WRITE_PERCENT / 100U;
+	kqd->async_depth = (1U << shift) * KYBER_ASYNC_PERCENT / 100U;
+
+	sbitmap_queue_min_shallow_depth(&tags->bitmap_tags, kqd->async_depth);
+}
+
+static int kyber_init_hctx(struct blk_mq_hw_ctx *hctx, unsigned int hctx_idx)
+{
 	struct kyber_hctx_data *khd;
 	int i;
 
@@ -446,8 +548,7 @@ static int kyber_init_hctx(struct blk_mq_hw_ctx *hctx, unsigned int hctx_idx)
 	khd->batching = 0;
 
 	hctx->sched_data = khd;
-	sbitmap_queue_min_shallow_depth(&hctx->sched_tags->bitmap_tags,
-					kqd->async_depth);
+	kyber_depth_updated(hctx);
 
 	return 0;
 
@@ -503,6 +604,10 @@ static void kyber_limit_depth(unsigned int op, struct blk_mq_alloc_data *data)
 		struct kyber_queue_data *kqd = data->q->elevator->elevator_data;
 
 		data->shallow_depth = kqd->async_depth;
+	} else if (op_is_write(op)) {
+		struct kyber_queue_data *kqd = data->q->elevator->elevator_data;
+
+		data->shallow_depth = kqd->write_depth;
 	}
 }
 
@@ -555,44 +660,50 @@ static void kyber_finish_request(struct request *rq)
 {
 	struct kyber_queue_data *kqd = rq->q->elevator->elevator_data;
 
+	if (unlikely(!(rq->rq_flags & RQF_ELVPRIV)))
+		return;
+
 	rq_clear_domain_token(kqd, rq);
 }
 
-static void kyber_completed_request(struct request *rq)
+static void add_latency_sample(struct kyber_cpu_latency *cpu_latency,
+			       unsigned int sched_domain, unsigned int type,
+			       u64 target, u64 latency)
 {
-	struct request_queue *q = rq->q;
-	struct kyber_queue_data *kqd = q->elevator->elevator_data;
-	unsigned int sched_domain;
-	u64 now, latency, target;
+	unsigned int bucket;
+	u64 divisor;
 
-	/*
-	 * Check if this request met our latency goal. If not, quickly gather
-	 * some statistics and start throttling.
-	 */
-	sched_domain = kyber_sched_domain(rq->cmd_flags);
-	switch (sched_domain) {
-	case KYBER_READ:
-		target = kqd->read_lat_nsec;
-		break;
-	case KYBER_SYNC_WRITE:
-		target = kqd->write_lat_nsec;
-		break;
-	default:
-		return;
+	if (latency > 0) {
+		divisor = max_t(u64, target >> KYBER_LATENCY_SHIFT, 1);
+		bucket = min_t(unsigned int, div64_u64(latency - 1, divisor),
+			       KYBER_LATENCY_BUCKETS - 1);
+	} else {
+		bucket = 0;
 	}
 
-	/* If we are already monitoring latencies, don't check again. */
-	if (blk_stat_is_active(kqd->cb))
+	atomic_inc(&cpu_latency->buckets[sched_domain][type][bucket]);
+}
+
+static void kyber_completed_request(struct request *rq, u64 now)
+{
+	struct kyber_queue_data *kqd = rq->q->elevator->elevator_data;
+	struct kyber_cpu_latency *cpu_latency;
+	unsigned int sched_domain;
+	u64 target;
+
+	sched_domain = kyber_sched_domain(rq->cmd_flags);
+	if (sched_domain == KYBER_OTHER)
 		return;
 
-	now = ktime_get_ns();
-	if (now < rq->io_start_time_ns)
-		return;
+	cpu_latency = get_cpu_ptr(kqd->cpu_latency);
+	target = kqd->latency_targets[sched_domain];
+	add_latency_sample(cpu_latency, sched_domain, KYBER_TOTAL_LATENCY,
+			   target, now - rq->start_time_ns);
+	add_latency_sample(cpu_latency, sched_domain, KYBER_IO_LATENCY, target,
+			   now - rq->io_start_time_ns);
+	put_cpu_ptr(kqd->cpu_latency);
 
-	latency = now - rq->io_start_time_ns;
-
-	if (latency > target)
-		blk_stat_activate_msecs(kqd->cb, 10);
+	timer_reduce(&kqd->timer, jiffies + HZ / 10);
 }
 
 struct flush_kcq_data {
@@ -713,6 +824,9 @@ kyber_dispatch_cur_domain(struct kyber_queue_data *kqd,
 			rq_set_domain_token(rq, nr);
 			list_del_init(&rq->queuelist);
 			return rq;
+		} else {
+			trace_kyber_throttled(kqd->q,
+					      kyber_domain_names[khd->cur_domain]);
 		}
 	} else if (sbitmap_any_bit_set(&khd->kcq_map[khd->cur_domain])) {
 		nr = kyber_get_domain_token(kqd, khd, hctx);
@@ -723,6 +837,9 @@ kyber_dispatch_cur_domain(struct kyber_queue_data *kqd,
 			rq_set_domain_token(rq, nr);
 			list_del_init(&rq->queuelist);
 			return rq;
+		} else {
+			trace_kyber_throttled(kqd->q,
+					      kyber_domain_names[khd->cur_domain]);
 		}
 	}
 
@@ -790,17 +907,69 @@ static bool kyber_has_work(struct blk_mq_hw_ctx *hctx)
 	return false;
 }
 
-#define KYBER_LAT_SHOW_STORE(op)					\
-static ssize_t kyber_##op##_lat_show(struct elevator_queue *e,		\
-				     char *page)			\
+#define KYBER_MAX_CMD_LEN	128
+
+static ssize_t kyber_min_depth_show(struct elevator_queue *e, char *page)
+{
+	struct kyber_queue_data *kqd = e->elevator_data;
+	int len = 0, i;
+
+	for (i = 0; i < KYBER_NUM_DOMAINS; i++)
+		len += sprintf(page + len, "%u ", kqd->kyber_min_depth[i]);
+
+	page[len - 1] = '\n';
+
+	return len;
+}
+
+static ssize_t kyber_min_depth_store(struct elevator_queue *e,
+		const char *page, size_t count)
+{
+	struct kyber_queue_data *kqd = e->elevator_data;
+	unsigned int depth[KYBER_NUM_DOMAINS];
+	char *ptr, *command;
+	int i;
+
+	if (strlen(page) >= KYBER_MAX_CMD_LEN)
+		return -EINVAL;
+
+	command = kzalloc(KYBER_MAX_CMD_LEN, GFP_KERNEL);
+	strncpy(command, page, KYBER_MAX_CMD_LEN);
+
+	for (i = 0; i < KYBER_NUM_DOMAINS; i++) {
+		ptr = strsep(&command, " ");
+		if (!ptr)
+			return -EINVAL;
+		if (kstrtouint(ptr, 10, &depth[i])) {
+			return -EINVAL;
+		} else {
+			if (depth[i] > kqd->kyber_depth[i])
+				return -EINVAL;
+			if (depth[i] < 1)
+				return -EINVAL;
+		}
+	}
+
+	if (strsep(&command, " "))
+		return -EINVAL;
+
+	for (i = 0; i < KYBER_NUM_DOMAINS; i++)
+		kqd->kyber_min_depth[i] = depth[i];
+
+	return count;
+}
+
+#define KYBER_LAT_SHOW_STORE(domain, name)				\
+static ssize_t kyber_##name##_lat_show(struct elevator_queue *e,	\
+				       char *page)			\
 {									\
 	struct kyber_queue_data *kqd = e->elevator_data;		\
 									\
-	return sprintf(page, "%llu\n", kqd->op##_lat_nsec);		\
+	return sprintf(page, "%llu\n", kqd->latency_targets[domain]);	\
 }									\
 									\
-static ssize_t kyber_##op##_lat_store(struct elevator_queue *e,		\
-				      const char *page, size_t count)	\
+static ssize_t kyber_##name##_lat_store(struct elevator_queue *e,	\
+					const char *page, size_t count)	\
 {									\
 	struct kyber_queue_data *kqd = e->elevator_data;		\
 	unsigned long long nsec;					\
@@ -810,18 +979,19 @@ static ssize_t kyber_##op##_lat_store(struct elevator_queue *e,		\
 	if (ret)							\
 		return ret;						\
 									\
-	kqd->op##_lat_nsec = nsec;					\
+	kqd->latency_targets[domain] = nsec;				\
 									\
 	return count;							\
 }
-KYBER_LAT_SHOW_STORE(read);
-KYBER_LAT_SHOW_STORE(write);
+KYBER_LAT_SHOW_STORE(KYBER_READ, read);
+KYBER_LAT_SHOW_STORE(KYBER_WRITE, write);
 #undef KYBER_LAT_SHOW_STORE
 
 #define KYBER_LAT_ATTR(op) __ATTR(op##_lat_nsec, 0644, kyber_##op##_lat_show, kyber_##op##_lat_store)
 static struct elv_fs_entry kyber_sched_attrs[] = {
 	KYBER_LAT_ATTR(read),
 	KYBER_LAT_ATTR(write),
+	__ATTR(min_depth, 0644, kyber_min_depth_show, kyber_min_depth_store),
 	__ATTR_NULL
 };
 #undef KYBER_LAT_ATTR
@@ -882,7 +1052,8 @@ static int kyber_##name##_waiting_show(void *data, struct seq_file *m)	\
 	return 0;							\
 }
 KYBER_DEBUGFS_DOMAIN_ATTRS(KYBER_READ, read)
-KYBER_DEBUGFS_DOMAIN_ATTRS(KYBER_SYNC_WRITE, sync_write)
+KYBER_DEBUGFS_DOMAIN_ATTRS(KYBER_WRITE, write)
+KYBER_DEBUGFS_DOMAIN_ATTRS(KYBER_DISCARD, discard)
 KYBER_DEBUGFS_DOMAIN_ATTRS(KYBER_OTHER, other)
 #undef KYBER_DEBUGFS_DOMAIN_ATTRS
 
@@ -900,20 +1071,7 @@ static int kyber_cur_domain_show(void *data, struct seq_file *m)
 	struct blk_mq_hw_ctx *hctx = data;
 	struct kyber_hctx_data *khd = hctx->sched_data;
 
-	switch (khd->cur_domain) {
-	case KYBER_READ:
-		seq_puts(m, "READ\n");
-		break;
-	case KYBER_SYNC_WRITE:
-		seq_puts(m, "SYNC_WRITE\n");
-		break;
-	case KYBER_OTHER:
-		seq_puts(m, "OTHER\n");
-		break;
-	default:
-		seq_printf(m, "%u\n", khd->cur_domain);
-		break;
-	}
+	seq_printf(m, "%s\n", kyber_domain_names[khd->cur_domain]);
 	return 0;
 }
 
@@ -930,7 +1088,8 @@ static int kyber_batching_show(void *data, struct seq_file *m)
 	{#name "_tokens", 0400, kyber_##name##_tokens_show}
 static const struct blk_mq_debugfs_attr kyber_queue_debugfs_attrs[] = {
 	KYBER_QUEUE_DOMAIN_ATTRS(read),
-	KYBER_QUEUE_DOMAIN_ATTRS(sync_write),
+	KYBER_QUEUE_DOMAIN_ATTRS(write),
+	KYBER_QUEUE_DOMAIN_ATTRS(discard),
 	KYBER_QUEUE_DOMAIN_ATTRS(other),
 	{"async_depth", 0400, kyber_async_depth_show},
 	{},
@@ -942,7 +1101,8 @@ static const struct blk_mq_debugfs_attr kyber_queue_debugfs_attrs[] = {
 	{#name "_waiting", 0400, kyber_##name##_waiting_show}
 static const struct blk_mq_debugfs_attr kyber_hctx_debugfs_attrs[] = {
 	KYBER_HCTX_DOMAIN_ATTRS(read),
-	KYBER_HCTX_DOMAIN_ATTRS(sync_write),
+	KYBER_HCTX_DOMAIN_ATTRS(write),
+	KYBER_HCTX_DOMAIN_ATTRS(discard),
 	KYBER_HCTX_DOMAIN_ATTRS(other),
 	{"cur_domain", 0400, kyber_cur_domain_show},
 	{"batching", 0400, kyber_batching_show},
@@ -966,6 +1126,7 @@ static struct elevator_type kyber_sched = {
 		.completed_request = kyber_completed_request,
 		.dispatch_request = kyber_dispatch_request,
 		.has_work = kyber_has_work,
+		.depth_updated = kyber_depth_updated,
 	},
 	.uses_mq = true,
 #ifdef CONFIG_BLK_DEBUG_FS

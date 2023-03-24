@@ -36,6 +36,7 @@
 #include "blk-stat.h"
 #include "blk-mq-sched.h"
 #include "blk-rq-qos.h"
+#include "mtk_mmc_block.h"
 
 static bool blk_mq_poll(struct request_queue *q, blk_qc_t cookie);
 static void blk_mq_poll_stats_start(struct request_queue *q);
@@ -331,6 +332,20 @@ static struct request *blk_mq_rq_ctx_init(struct blk_mq_alloc_data *data,
 	rq->rl = NULL;
 #endif
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+	rq->info.rq_get_time = 0;
+	rq->info.rq_insert_time = 0;
+	rq->info.rq_dequeue_time = 0;
+	rq->info.rq_requeue_time = 0;
+	rq->info.rq_issue_time = 0;
+	rq->info.rq_softin_time = 0;
+	rq->info.rq_softout_time = 0;
+	rq->info.rq_qcmd_time = 0;
+	rq->info.rq_compl_time = 0;
+	rq->info.rq_abort_time = 0;
+	rq->info.requeue_count = 0;
+#endif
+
 	data->ctx->rq_dispatched[op_is_sync(op)]++;
 	refcount_set(&rq->ref, 1);
 	return rq;
@@ -526,6 +541,9 @@ inline void __blk_mq_end_request(struct request *rq, blk_status_t error)
 		blk_stat_add(rq, now);
 	}
 
+	if (rq->internal_tag != -1)
+		blk_mq_sched_completed_request(rq, now);
+
 	blk_account_io_done(rq, now);
 
 	if (rq->end_io) {
@@ -562,8 +580,6 @@ static void __blk_mq_complete_request(struct request *rq)
 
 	if (!blk_mq_mark_complete(rq))
 		return;
-	if (rq->internal_tag != -1)
-		blk_mq_sched_completed_request(rq);
 
 	if (!test_bit(QUEUE_FLAG_SAME_COMP, &rq->q->queue_flags)) {
 		rq->q->softirq_done_fn(rq);
@@ -634,6 +650,9 @@ void blk_mq_start_request(struct request *rq)
 	blk_mq_sched_started_request(rq);
 
 	trace_block_rq_issue(q, rq);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_rq_issue(rq);
+#endif
 
 	if (test_bit(QUEUE_FLAG_STATS, &q->queue_flags)) {
 		rq->io_start_time_ns = ktime_get_ns();
@@ -667,6 +686,9 @@ static void __blk_mq_requeue_request(struct request *rq)
 	blk_mq_put_driver_tag(rq);
 
 	trace_block_rq_requeue(q, rq);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_rq_requeue(rq);
+#endif
 	rq_qos_requeue(q, rq);
 
 	if (blk_mq_request_started(rq)) {
@@ -990,6 +1012,10 @@ bool blk_mq_get_driver_tag(struct request *rq)
 	if (blk_mq_tag_is_reserved(data.hctx->sched_tags, rq->internal_tag))
 		data.flags |= BLK_MQ_REQ_RESERVED;
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_mq_get_tag_in(rq);
+#endif
+
 	shared = blk_mq_tag_busy(data.hctx);
 	rq->tag = blk_mq_get_tag(&data);
 	if (rq->tag >= 0) {
@@ -998,6 +1024,10 @@ bool blk_mq_get_driver_tag(struct request *rq)
 			atomic_inc(&data.hctx->nr_active);
 		}
 		data.hctx->tags->rqs[rq->tag] = rq;
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+		trigger_mq_get_tag_out(rq);
+#endif
 	}
 
 done:
@@ -1463,6 +1493,7 @@ EXPORT_SYMBOL(blk_mq_queue_stopped);
  */
 void blk_mq_stop_hw_queue(struct blk_mq_hw_ctx *hctx)
 {
+	mt_bio_queue_free(current);
 	cancel_delayed_work(&hctx->run_work);
 
 	set_bit(BLK_MQ_S_STOPPED, &hctx->state);
@@ -1550,6 +1581,9 @@ static inline void __blk_mq_insert_req_list(struct blk_mq_hw_ctx *hctx,
 	lockdep_assert_held(&ctx->lock);
 
 	trace_block_rq_insert(hctx->queue, rq);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_rq_insert(rq);
+#endif
 
 	if (at_head)
 		list_add(&rq->queuelist, &ctx->rq_list);
@@ -1670,6 +1704,10 @@ static void blk_mq_bio_to_request(struct request *rq, struct bio *bio)
 	blk_init_request_from_bio(rq, bio);
 
 	blk_rq_set_rl(rq, blk_get_rl(rq->q, bio));
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_getrq(rq, bio);
+#endif
 
 	blk_account_io_start(rq, true);
 }
@@ -1843,7 +1881,13 @@ static blk_qc_t blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	if (blk_mq_sched_bio_merge(q, bio))
 		return BLK_QC_T_NONE;
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_bio_wbtin(bio);
+#endif
 	rq_qos_throttle(q, bio, NULL);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_bio_wbtout(bio, q);
+#endif
 
 	trace_block_getrq(q, bio, bio->bi_opf);
 
@@ -2185,7 +2229,6 @@ static int blk_mq_init_hctx(struct request_queue *q,
 	node = hctx->numa_node;
 	if (node == NUMA_NO_NODE)
 		node = hctx->numa_node = set->numa_node;
-
 	INIT_DELAYED_WORK(&hctx->run_work, blk_mq_run_work_fn);
 	spin_lock_init(&hctx->lock);
 	INIT_LIST_HEAD(&hctx->dispatch);

@@ -438,6 +438,32 @@ struct request_list *__blk_queue_next_rl(struct request_list *rl,
 	return &blkg->rl;
 }
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+static int blkcg_show_priority(struct seq_file *sf, void *v)
+{
+	struct blkcg *blkcg = css_to_blkcg(seq_css(sf));
+
+	seq_printf(sf, "%d\n", blkcg->priority);
+
+	return 0;
+}
+
+static int blkcg_set_priority(struct cgroup_subsys_state *css,
+			     struct cftype *cftype, u64 val)
+{
+	struct blkcg *blkcg = css_to_blkcg(css);
+
+	if (val > 9)
+		return -ERANGE;
+
+	spin_lock_irq(&blkcg->lock);
+	blkcg->priority = (int)val;
+	spin_unlock_irq(&blkcg->lock);
+
+	return 0;
+}
+#endif
+
 static int blkcg_reset_stats(struct cgroup_subsys_state *css,
 			     struct cftype *cftype, u64 val)
 {
@@ -1046,6 +1072,13 @@ static struct cftype blkcg_legacy_files[] = {
 		.name = "reset_stats",
 		.write_u64 = blkcg_reset_stats,
 	},
+#ifdef CONFIG_BLK_ENHANCEMENT
+	{
+		.name = "priority",
+		.seq_show = blkcg_show_priority,
+		.write_u64 = blkcg_set_priority,
+	},
+#endif
 	{ }	/* terminate */
 };
 

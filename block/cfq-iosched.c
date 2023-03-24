@@ -4714,6 +4714,18 @@ static int cfq_init_queue(struct request_queue *q, struct elevator_type *e)
 	cfqd->cfq_group_idle = cfq_group_idle;
 	cfqd->cfq_latency = 1;
 	cfqd->hw_tag = -1;
+
+	if (ktime_get_boot_ns() < ((u64)NSEC_PER_SEC * 10)) {
+		cfqd->cfq_quantum = 28;
+		cfqd->cfq_fifo_expire[0] = cfq_fifo_expire[0];
+		cfqd->cfq_fifo_expire[1] = cfq_fifo_expire[1];
+		cfqd->cfq_slice[0] = (u64)NSEC_PER_SEC * 20/1000;
+		cfqd->cfq_slice[1] = (u64)NSEC_PER_SEC * 20/1000;
+		cfqd->cfq_slice_async_rq = 2;
+		cfqd->cfq_slice_idle = 0;
+		cfqd->cfq_group_idle = 0;
+	}
+
 	/*
 	 * we optimistically start assuming sync ops weren't delayed in last
 	 * second, in order to have larger depth for async operations.

@@ -586,6 +586,7 @@ void elv_requeue_request(struct request_queue *q, struct request *rq)
 	 */
 	if (blk_account_rq(rq)) {
 		q->in_flight[rq_is_sync(rq)]--;
+		q->rw_inflight[op_is_write(req_op(rq))]--;
 		if (rq->rq_flags & RQF_SORTED)
 			elv_deactivate_rq(q, rq);
 	}
@@ -619,6 +620,9 @@ void elv_drain_elevator(struct request_queue *q)
 void __elv_add_request(struct request_queue *q, struct request *rq, int where)
 {
 	trace_block_rq_insert(q, rq);
+#ifdef CONFIG_BLK_ENHANCEMENT
+	trigger_rq_insert(rq);
+#endif
 
 	blk_pm_add_request(q, rq);
 
@@ -780,6 +784,7 @@ void elv_completed_request(struct request_queue *q, struct request *rq)
 	 */
 	if (blk_account_rq(rq)) {
 		q->in_flight[rq_is_sync(rq)]--;
+		q->rw_inflight[op_is_write(req_op(rq))]--;
 		if ((rq->rq_flags & RQF_SORTED) &&
 		    e->type->ops.sq.elevator_completed_req_fn)
 			e->type->ops.sq.elevator_completed_req_fn(q, rq);
@@ -988,7 +993,10 @@ int elevator_init_mq(struct request_queue *q)
 	if (unlikely(q->elevator))
 		goto out_unlock;
 
-	e = elevator_get(q, "mq-deadline", false);
+	if (q->tag_set->queue_depth > 32)
+		e = elevator_get(q, "mq-deadline", false);
+	else
+		e = elevator_get(q, "kyber", false);
 	if (!e)
 		goto out_unlock;
 
