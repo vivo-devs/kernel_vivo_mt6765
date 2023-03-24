@@ -70,6 +70,22 @@ void __delayacct_blkio_start(void)
 	current->delays->blkio_start = ktime_get_ns();
 }
 
+static void delayacct_end_blkio(raw_spinlock_t *lock, u64 *start, u64 *total,
+			  u32 *count, struct task_delay_info *delays)
+{
+	s64 ns = ktime_get_ns() - *start;
+	unsigned long flags;
+
+	delays->blkio_last = ns;
+
+	if (ns > 0) {
+		raw_spin_lock_irqsave(lock, flags);
+		*total += ns;
+		(*count)++;
+		raw_spin_unlock_irqrestore(lock, flags);
+	}
+}
+
 /*
  * We cannot rely on the `current` macro, as we haven't yet switched back to
  * the process being woken.
@@ -88,7 +104,8 @@ void __delayacct_blkio_end(struct task_struct *p)
 		count = &delays->blkio_count;
 	}
 
-	delayacct_end(&delays->lock, &delays->blkio_start, total, count);
+	delayacct_end_blkio(&delays->lock, &delays->blkio_start, total,
+			count, delays);
 }
 
 int __delayacct_add_tsk(struct taskstats *d, struct task_struct *tsk)

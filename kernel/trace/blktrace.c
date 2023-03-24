@@ -917,7 +917,11 @@ static void blk_add_trace_bio_frontmerge(void *ignore,
 }
 
 static void blk_add_trace_bio_queue(void *ignore,
-				    struct request_queue *q, struct bio *bio)
+				    struct request_queue *q, struct bio *bio
+#ifdef CONFIG_BLK_ENHANCEMENT
+				    , int prio
+#endif
+				    )
 {
 	blk_add_trace_bio(q, bio, BLK_TA_QUEUE, 0);
 }
