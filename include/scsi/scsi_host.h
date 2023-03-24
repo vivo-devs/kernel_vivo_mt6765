@@ -489,6 +489,10 @@ struct scsi_host_template {
 	/* Delay for runtime autosuspend */
 	int rpm_autosuspend_delay;
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+	bool io_trace;
+#endif
+
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
 	ANDROID_KABI_RESERVE(3);

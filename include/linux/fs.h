@@ -857,10 +857,25 @@ static inline loff_t i_size_read(const struct inode *inode)
 static inline void i_size_write(struct inode *inode, loff_t i_size)
 {
 #if BITS_PER_LONG==32 && defined(CONFIG_SMP)
+	unsigned sequence;
 	preempt_disable();
+	sequence = inode->i_size_seqcount.sequence;
 	write_seqcount_begin(&inode->i_size_seqcount);
 	inode->i_size = i_size;
 	write_seqcount_end(&inode->i_size_seqcount);
+	if ((inode->i_size_seqcount.sequence - sequence) != 2) {
+		pr_warn("[%s:%d] <%s:%d> <%s:%d> inode 0x%px(%lu) sb 0x%px init_seq %u cur_seq %u\n",
+				__func__, __LINE__,
+				current->comm, task_pid_nr(current),
+				current->group_leader ? current->group_leader->comm : "",
+				task_tgid_nr(current),
+				inode,
+				inode->i_ino,
+				inode->i_sb,
+				sequence,
+				inode->i_size_seqcount.sequence);
+		WARN_ON(1);
+	}
 	preempt_enable();
 #elif BITS_PER_LONG==32 && defined(CONFIG_PREEMPT)
 	preempt_disable();

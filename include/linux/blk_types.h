@@ -11,6 +11,10 @@
 #include <linux/ktime.h>
 #include <linux/android_kabi.h>
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+#include <linux/bto.h>
+#endif
+
 struct bio_set;
 struct bio;
 struct bio_integrity_payload;
@@ -200,6 +204,19 @@ struct bio {
 
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
 
+#ifdef CONFIG_MTK_HW_FDE
+		/*
+		 * MTK PATH:
+		 *
+		 * Indicating this bio request needs encryption or decryption by
+		 * HW FDE (Full Disk Encryption) engine.
+		 *
+		 * Set by DM Crypt.
+		 * Quried by HW FDE engine driver, e.g., eMMC/UFS.
+		 */
+		unsigned int		bi_hw_fde;
+		unsigned int		bi_key_idx;
+#endif
 	/*
 	 * Everything starting with bi_max_vecs will be preserved by bio_reset()
 	 */
@@ -216,6 +233,10 @@ struct bio {
 
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+	struct bto      bto;
+#endif
 
 	/*
 	 * We can inline a number of vecs at the end of the bio, to avoid

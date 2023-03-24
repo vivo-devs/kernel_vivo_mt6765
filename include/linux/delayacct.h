@@ -63,6 +63,8 @@ struct task_delay_info {
 
 	u32 freepages_count;	/* total count of memory reclaim */
 	u32 thrashing_count;	/* total count of thrash waits */
+
+	s64 blkio_last;
 };
 #endif
 

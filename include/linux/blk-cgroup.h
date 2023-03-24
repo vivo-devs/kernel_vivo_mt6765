@@ -58,6 +58,10 @@ struct blkcg {
 	struct list_head		cgwb_list;
 	refcount_t			cgwb_refcnt;
 #endif
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+	int	priority;
+#endif
 };
 
 /*

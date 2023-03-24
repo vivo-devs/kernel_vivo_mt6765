@@ -356,13 +356,25 @@ DEFINE_EVENT(block_bio_merge, block_bio_frontmerge,
  */
 TRACE_EVENT(block_bio_queue,
 
-	TP_PROTO(struct request_queue *q, struct bio *bio),
+	TP_PROTO(struct request_queue *q, struct bio *bio
+#ifdef CONFIG_BLK_ENHANCEMENT
+	, int prio
+#endif
+	),
 
-	TP_ARGS(q, bio),
+	TP_ARGS(q, bio
+#ifdef CONFIG_BLK_ENHANCEMENT
+	, prio
+#endif
+	),
 
 	TP_STRUCT__entry(
 		__field( dev_t,		dev			)
 		__field( sector_t,	sector			)
+#ifdef CONFIG_BLK_ENHANCEMENT
+		__field( int,		prio			)
+		__field( void *,	endio			)
+#endif
 		__field( unsigned int,	nr_sector		)
 		__array( char,		rwbs,	RWBS_LEN	)
 		__array( char,		comm,	TASK_COMM_LEN	)
@@ -371,15 +383,28 @@ TRACE_EVENT(block_bio_queue,
 	TP_fast_assign(
 		__entry->dev		= bio_dev(bio);
 		__entry->sector		= bio->bi_iter.bi_sector;
+#ifdef CONFIG_BLK_ENHANCEMENT
+		__entry->prio		= prio;
+		__entry->endio		= (void *)bio->bi_end_io;
+#endif
 		__entry->nr_sector	= bio_sectors(bio);
 		blk_fill_rwbs(__entry->rwbs, bio->bi_opf, bio->bi_iter.bi_size);
 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
 	),
 
-	TP_printk("%d,%d %s %llu + %u [%s]",
+	TP_printk("%d,%d %s %llu + %u [%s]"
+#ifdef CONFIG_BLK_ENHANCEMENT
+			" <%d> %ps"
+#endif
+			,
 		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->rwbs,
 		  (unsigned long long)__entry->sector,
-		  __entry->nr_sector, __entry->comm)
+		  __entry->nr_sector, __entry->comm
+#ifdef CONFIG_BLK_ENHANCEMENT
+		  , __entry->prio
+		  , __entry->endio
+#endif
+		  )
 );
 
 DECLARE_EVENT_CLASS(block_get_rq,
@@ -394,6 +419,12 @@ DECLARE_EVENT_CLASS(block_get_rq,
 		__field( unsigned int,	nr_sector		)
 		__array( char,		rwbs,	RWBS_LEN	)
 		__array( char,		comm,	TASK_COMM_LEN	)
+		__field( int,		op_flags	)
+		__field( int,		depth		)
+		__array( int,		nr_rqs,	2	)
+		__array( int,		rw_rqs,	2	)
+		__array( unsigned int,	in_flight,	2	)
+		__array( unsigned int,	rw_inflight,	2	)
         ),
 
 	TP_fast_assign(
@@ -403,12 +434,27 @@ DECLARE_EVENT_CLASS(block_get_rq,
 		blk_fill_rwbs(__entry->rwbs,
 			      bio ? bio->bi_opf : 0, __entry->nr_sector);
 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
+		__entry->op_flags	= bio ? bio->bi_opf : 0;
+		__entry->depth		= q->queue_depth;
+		__entry->nr_rqs[0]	= q->nr_rqs[0];
+		__entry->nr_rqs[1]	= q->nr_rqs[1];
+		__entry->rw_rqs[0]	= q->rw_rqs[0];
+		__entry->rw_rqs[1]	= q->rw_rqs[1];
+		__entry->in_flight[0]	= q->in_flight[0];
+		__entry->in_flight[1]	= q->in_flight[1];
+		__entry->rw_inflight[0]	= q->rw_inflight[0];
+		__entry->rw_inflight[1]	= q->rw_inflight[1];
         ),
 
-	TP_printk("%d,%d %s %llu + %u [%s]",
+	TP_printk("%d,%d %s %llu + %u [%s] %#x %d <%d %d> <%d %d> <%d %d> <%d %d>",
 		  MAJOR(__entry->dev), MINOR(__entry->dev), __entry->rwbs,
 		  (unsigned long long)__entry->sector,
-		  __entry->nr_sector, __entry->comm)
+		  __entry->nr_sector, __entry->comm,
+		  __entry->op_flags, __entry->depth,
+		  __entry->nr_rqs[0], __entry->nr_rqs[1],
+		  __entry->rw_rqs[0], __entry->rw_rqs[1],
+		  __entry->in_flight[0], __entry->in_flight[1],
+		  __entry->rw_inflight[0], __entry->rw_inflight[1])
 );
 
 /**

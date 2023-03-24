@@ -238,6 +238,7 @@ static inline bool mmc_op_multi(u32 opcode)
  */
 
 #define EXT_CSD_CMDQ_MODE_EN		15	/* R/W */
+#define EXT_CSD_MODE_CONFIG		30	/* R/W */
 #define EXT_CSD_FLUSH_CACHE		32      /* W */
 #define EXT_CSD_CACHE_CTRL		33      /* R/W */
 #define EXT_CSD_POWER_OFF_NOTIFICATION	34	/* R/W */
@@ -300,6 +301,9 @@ static inline bool mmc_op_multi(u32 opcode)
 #define EXT_CSD_PRE_EOL_INFO		267	/* RO */
 #define EXT_CSD_DEVICE_LIFE_TIME_EST_TYP_A	268	/* RO */
 #define EXT_CSD_DEVICE_LIFE_TIME_EST_TYP_B	269	/* RO */
+#define PRE_EOL_INFO				267 /* RO */
+#define	DEVICE_LIFE_TIME_EST_TYP_A	268 /* RO */
+#define DEVICE_LIFE_TIME_EST_TYP_B	269 /* RO */
 #define EXT_CSD_CMDQ_DEPTH		307	/* RO */
 #define EXT_CSD_CMDQ_SUPPORT		308	/* RO */
 #define EXT_CSD_SUPPORTED_MODE		493	/* RO */
@@ -406,6 +410,7 @@ static inline bool mmc_op_multi(u32 opcode)
 /*
  * BKOPS modes
  */
+#define EXT_CSD_MANUAL_BKOPS_DISABLE 0x00
 #define EXT_CSD_MANUAL_BKOPS_MASK	0x01
 #define EXT_CSD_AUTO_BKOPS_MASK		0x02
 

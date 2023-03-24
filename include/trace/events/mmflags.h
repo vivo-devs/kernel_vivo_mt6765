@@ -61,6 +61,8 @@
 #define IF_HAVE_PG_MLOCK(flag,string)
 #endif
 
+#define IF_HAVE_PG_PLINK(flag,string)
+
 #ifdef CONFIG_ARCH_USES_PG_UNCACHED
 #define IF_HAVE_PG_UNCACHED(flag,string) ,{1UL << flag, string}
 #else
@@ -102,6 +104,7 @@
 	{1UL << PG_swapbacked,		"swapbacked"	},		\
 	{1UL << PG_unevictable,		"unevictable"	}		\
 IF_HAVE_PG_MLOCK(PG_mlocked,		"mlocked"	)		\
+IF_HAVE_PG_PLINK(PG_plink,		"plink"	)		\
 IF_HAVE_PG_UNCACHED(PG_uncached,	"uncached"	)		\
 IF_HAVE_PG_HWPOISON(PG_hwpoison,	"hwpoison"	)		\
 IF_HAVE_PG_IDLE(PG_young,		"young"		)		\

@@ -90,6 +90,11 @@ struct blk_mq_tag_set {
 
 	struct mutex		tag_list_lock;
 	struct list_head	tag_list;
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+	atomic_t        inflight[2];
+	atomic_t        sched_inflight[2];
+#endif
 };
 
 struct blk_mq_queue_data {

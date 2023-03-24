@@ -159,6 +159,13 @@ struct net {
 #endif
 	struct sock		*diag_nlsk;
 	atomic_t		fnhe_genid;
+// vivo wumengxiang add for handshare begin
+	/* for tcp only */
+#ifndef VIVO_PROJECT_MODEL
+	unsigned int handshake_trials;
+	unsigned int handshake_failures;
+#endif
+// vivo wumengxiang add for handshare end
 } __randomize_layout;
 
 #include <linux/seq_file_net.h>

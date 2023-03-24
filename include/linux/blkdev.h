@@ -263,6 +263,10 @@ struct request {
 	rq_end_io_fn *end_io;
 	void *end_io_data;
 
+#ifdef CONFIG_BLK_ENHANCEMENT
+	struct rq_info info;
+#endif
+
 	/* for bidi */
 	struct request *next_rq;
 
@@ -440,6 +444,7 @@ struct request_queue {
 	struct elevator_queue	*elevator;
 	int			nr_rqs[2];	/* # allocated [a]sync rqs */
 	int			nr_rqs_elvpriv;	/* # allocated rqs w/ elvpriv */
+	int			rw_rqs[2];
 
 	struct blk_queue_stats	*stats;
 	struct rq_qos		*rq_qos;
@@ -568,6 +573,7 @@ struct request_queue {
 
 	unsigned int		nr_sorted;
 	unsigned int		in_flight[2];
+	unsigned int		rw_inflight[2];
 
 	/*
 	 * Number of active block driver functions for which blk_drain_queue()
@@ -665,6 +671,10 @@ struct request_queue {
 #ifdef CONFIG_BLK_DEBUG_FS
 	struct dentry		*debugfs_dir;
 	struct dentry		*sched_debugfs_dir;
+#endif
+
+#ifdef CONFIG_BLK_ENHANCEMENT
+	bool			io_trace;
 #endif
 
 	bool			mq_sysfs_init_done;
