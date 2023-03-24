@@ -22,6 +22,12 @@
 #include <linux/gfp.h>
 #include <net/tcp.h>
 
+// vivo wumengxiang add for handshare begin
+#ifndef VIVO_PROJECT_MODEL
+extern void  handshake_work(char handshakeinfo[]);
+#endif
+// vivo wumengxiang add for handshare end
+
 static u32 tcp_retransmit_stamp(const struct sock *sk)
 {
 	u32 start_ts = tcp_sk(sk)->retrans_stamp;
@@ -217,6 +223,13 @@ static bool retransmits_timed_out(struct sock *sk,
 static int tcp_write_timeout(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
+// vivo wumengxiang add for handshare begin
+#ifndef VIVO_PROJECT_MODEL
+	struct inet_sock *inet = inet_sk(sk);
+	int oldlen = 0;
+	char data_buffer[128] = {0};
+#endif
+// vivo wumengxiang add for handshare end
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct net *net = sock_net(sk);
 	bool expired = false, do_reset;
@@ -230,6 +243,47 @@ static int tcp_write_timeout(struct sock *sk)
 		}
 		retry_until = icsk->icsk_syn_retries ? : net->ipv4.sysctl_tcp_syn_retries;
 		expired = icsk->icsk_retransmits >= retry_until;
+// vivo wumengxiang add for handshare begin
+#ifndef VIVO_PROJECT_MODEL
+		if (icsk->icsk_retransmits == 1) {
+			if (sk->sk_family == AF_INET) {
+				oldlen = snprintf(data_buffer, sizeof(data_buffer), "%pI4,%d,%u,%u,%u", 
+					  &inet->inet_daddr, 
+					  icsk->icsk_retransmits, 
+					  (unsigned int)sk->sk_uid.val, 
+					  net->handshake_trials, 
+					  net->handshake_failures);
+			}
+#if IS_ENABLED(CONFIG_IPV6)
+			else if (sk->sk_family == AF_INET6) {
+				if (!(sk->sk_v6_daddr.s6_addr32[0] == 0
+				  && sk->sk_v6_daddr.s6_addr32[1] == 0
+				  && sk->sk_v6_daddr.s6_addr16[4] == 0
+				  && sk->sk_v6_daddr.s6_addr16[5] == 0xffff)) {
+					oldlen = snprintf(data_buffer, sizeof(data_buffer), "%pI6,%d,%u,%u,%u",
+						  &sk->sk_v6_daddr, 
+						  icsk->icsk_retransmits, 
+						  (unsigned int)sk->sk_uid.val, 
+						  net->handshake_trials, 
+						  net->handshake_failures);
+				} else {
+					oldlen = snprintf(data_buffer, sizeof(data_buffer), "%pI4,%d,%u,%u,%u",
+						  &inet->inet_daddr, 
+						  icsk->icsk_retransmits, 
+						  (unsigned int)sk->sk_uid.val, 
+						  net->handshake_trials, 
+						  net->handshake_failures);
+				}
+			}
+#endif
+			if (oldlen > 10 && oldlen < 70 && (!strnstr(data_buffer, "127.0.0.1", strlen(data_buffer)))) {
+				handshake_work(data_buffer);
+				net->handshake_trials = 0;
+				net->handshake_failures = 0;
+			}
+		}
+#endif
+// vivo wumengxiang add for handshare end
 	} else {
 		if (retransmits_timed_out(sk, net->ipv4.sysctl_tcp_retries1, 0)) {
 			/* Black hole detection */
@@ -538,7 +592,14 @@ void tcp_retransmit_timer(struct sock *sk)
 	 */
 	icsk->icsk_backoff++;
 	icsk->icsk_retransmits++;
-
+// vivo wumengxiang add for handshare begin
+#ifndef VIVO_PROJECT_MODEL
+	if (sk->sk_state == TCP_SYN_SENT) {
+		net->handshake_trials++;
+		net->handshake_failures++;
+	}
+#endif
+// vivo wumengxiang add for handshare begin
 out_reset_timer:
 	/* If stream is thin, use linear timeouts. Since 'icsk_backoff' is
 	 * used to reset timer, set to 0. Recalculate 'icsk_rto' as this

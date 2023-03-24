@@ -2825,6 +2825,8 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 	sk->sk_incoming_cpu = -1;
 
 	sk_rx_queue_clear(sk);
+
+
 	/*
 	 * Before updating sk_refcnt, we must commit prior changes to memory
 	 * (Documentation/RCU/rculist_nulls.txt for details)
@@ -3455,6 +3457,13 @@ static const struct seq_operations proto_seq_ops = {
 
 static __net_init int proto_init_net(struct net *net)
 {
+// vivo wumengxiang add for handshare begin
+#ifndef VIVO_PROJECT_MODEL
+	net->handshake_trials = 0;
+	net->handshake_failures = 0;
+#endif
+// vivo wumengxiang add for handshare end
+
 	if (!proc_create_net("protocols", 0444, net->proc_net, &proto_seq_ops,
 			sizeof(struct seq_net_private)))
 		return -ENOMEM;

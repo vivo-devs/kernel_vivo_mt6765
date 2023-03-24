@@ -121,6 +121,7 @@
 #endif
 #include <net/l3mdev.h>
 
+
 #include <trace/events/sock.h>
 
 /* The inetsw table contains everything that inet_create needs to
@@ -391,6 +392,7 @@ lookup_protocol:
 		}
 	}
 out:
+
 	return err;
 out_rcu_unlock:
 	rcu_read_unlock();
@@ -788,6 +790,8 @@ int inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;
 
+
+
 	sock_rps_record_flow(sk);
 
 	/* We may need to bind the socket. */
@@ -831,6 +835,7 @@ int inet_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 				   flags & ~MSG_DONTWAIT, &addr_len);
 	if (err >= 0)
 		msg->msg_namelen = addr_len;
+
 	return err;
 }
 EXPORT_SYMBOL(inet_recvmsg);
